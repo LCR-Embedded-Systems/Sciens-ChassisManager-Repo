@@ -1,0 +1,77 @@
+{
+    "tempsensors": {
+        "hwmon2":"Adapter_Board"
+    },
+    "adcsensors": {
+        "iio:device0": {
+            "Fan_Voltage": {
+                "type": "voltage",
+                "dir": "in_voltage0_raw",
+                "target": 28.0
+            }
+        },
+        "iio:device1": {
+            "12V_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage9_raw",
+                "target": 12.0
+            },
+            "3_3V_Rail": {
+                "type": "voltage",
+                "dir":  "in_voltage10_raw",
+                "target": 3.3
+            },
+            "5V_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage11_raw",
+                "target": 5.0
+            },
+            "3_3auxV_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage12_raw",
+                "target": 3.3
+            },
+            "12pauxV_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage13_raw",
+                "target": 12.0
+            },
+            "12nauxV_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage14_raw",
+                "target": -12.0
+            } 
+        }
+    },
+    "fancontrollers": {
+        "hwmon4": {
+
+        },
+        "hwmon5": {
+            "J17": 1,
+            "J6": 2,
+            "J5": 3,
+            "J7": 4
+        }
+    },
+    "gpioexpanders": {
+        "gpiochip5" : {
+            "POWER_LED_RED" : 0,
+            "POWER_LED_GRN" : 1,
+            "TEMP_LED_RED" : 2,
+            "TEMP_LED_GRN" : 3,
+            "USER_LED_RED" : 4,
+            "USER_LED_GRN" : 5,
+            "FAULT_LED_RED" : 6,
+            "FAULT_LED_GRN" : 7,
+            "PS1_FAN_FAIL" : 8,
+            "PS2_FAN_FAIL" : 9,
+            "INTRUSION" : 10,
+            "POWER_SWITCH_INPUT_CHM" : 11,
+            "ZEROIZE_INPUT" : 12,
+            "unused0" : 13,
+            "unused1" : 14,
+            "unused2" : 15
+        }
+    }
+}

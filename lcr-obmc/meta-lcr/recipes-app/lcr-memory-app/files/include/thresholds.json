@@ -1,0 +1,68 @@
+{
+    "TempLimits": {
+        "critmin": -20.0,
+        "critmax": 80.0,
+        "warnmin": -15.0,
+        "warnmax": 75.0
+    },
+    "12V_Rail": {
+        "critmin": 11.4,
+        "critmax": 12.6,
+        "warnmin": 11.35,
+        "warnmax": 12.55
+    },
+    "12nauxV_Rail": {
+        "critmin": -11.4,
+        "critmax": -12.6,
+        "warnmin": -11.35,
+        "warnmax": -12.55
+    },
+    "12pauxV_Rail": {
+        "critmin": 11.4,
+        "critmax": 12.6,
+        "warnmin": 11.35,
+        "warnmax": 12.55
+    },
+    "3_3V_Rail": {
+        "critmin": 3.135,
+        "critmax": 3.465,
+        "warnmin": 3.155,
+        "warnmax": 3.445
+    },
+    "3_3auxV_Rail": {
+        "critmin": 3.135,
+        "critmax": 3.465,
+        "warnmin": 3.155,
+        "warnmax": 3.445
+    },
+    "5V_Rail": {
+        "critmin": 4.75,
+        "critmax": 5.25,
+        "warnmin": 4.8,
+        "warnmax": 5.2
+    },
+    "J17": {
+        "critmin": 0,
+        "critmax": 5000,
+        "warnmin": 0,
+        "warnmax": 5000
+    },
+    "J6": {
+        "critmin": 0,
+        "critmax": 5000,
+        "warnmin": 0,
+        "warnmax": 5000
+    },
+    "J5": {
+        "critmin": 0,
+        "critmax": 5000,
+        "warnmin": 0,
+        "warnmax": 5000
+    },
+    "J7": {
+        "critmin": 0,
+        "critmax": 5000,
+        "warnmin": 0,
+        "warnmax": 5000
+    }
+}

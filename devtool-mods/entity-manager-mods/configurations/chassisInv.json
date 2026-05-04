@@ -1,0 +1,8 @@
+{
+    "Name": "LCR_ChM",
+    "Type": "Chassis",
+    "Probe": "xyz.openbmc_project.Inventory.Item.I2CDevice({'Bus': 3, 'Address': 72})",
+    "xyz.openbmc_project.Inventory.Decorator.CoolingType": {
+        "AirCooled": true
+    }
+}

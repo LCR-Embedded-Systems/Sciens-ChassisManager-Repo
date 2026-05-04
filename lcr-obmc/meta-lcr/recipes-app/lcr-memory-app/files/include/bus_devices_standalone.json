@@ -1,0 +1,99 @@
+{
+    "tempsensors": {
+        "hwmon2" : {
+            "name" : "bus4_1",
+            "number" : 8
+        }, 
+        "hwmon3": {
+            "name": "bus4_2",
+            "number" : 9
+        },
+        "hwmon4": {
+            "name" : "bus5_1",
+            "number" : 10
+        },
+        "hwmon5": {
+            "name" : "bus5_2",
+            "number" : 11
+        },
+        "hwmon6": {
+            "name" : "bus6_1",
+            "number" : 12
+        },
+        "hwmon7": {
+            "name" : "bus6_2",
+            "number" : 13
+        },
+        "hwmon8": {
+            "name" : "bus7_1",
+            "number" : 14
+        },
+        "hwmon9": {
+            "name" : "bus7_2",
+            "number" : 15
+        }
+    },
+    "adcsensors": {
+        "iio:device0": {
+            "12V_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage9_raw",
+                "target": 12.0,
+                "number" : 16
+            },
+            "3_3V_Rail": {
+                "type": "voltage",
+                "dir":  "in_voltage10_raw",
+                "target": 3.3,
+                "number" : 17
+            },
+            "5V_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage11_raw",
+                "target": 5.0,
+                "number" : 18
+            },
+            "3_3auxV_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage12_raw",
+                "target": 3.3,
+                "number" : 19
+            },
+            "12pauxV_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage13_raw",
+                "target": 12.0,
+                "number" : 20
+            },
+            "12nauxV_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage14_raw",
+                "target": -12.0,
+                "number" : 21
+            } 
+        }
+    },
+    "fancontrollers": {
+        "hwmon10": {
+            "J17": {
+                "dir" : 1,
+                "number" : 22
+            },
+            "J6":{
+                "dir" : 2,
+                "number" : 23
+            },
+            "J5": {
+                "dir" : 3,
+                "number" : 24
+            },
+            "J7": {
+                "dir" : 4,
+                "number" : 25
+            }
+        }
+    },
+    "gpioexpanders": {
+
+    }
+}
