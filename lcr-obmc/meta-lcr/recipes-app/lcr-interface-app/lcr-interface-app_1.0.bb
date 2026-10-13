@@ -1,4 +1,4 @@
-SUMMARY = "Temperature Driver"
+SUMMARY = "Command line tool for reading status of various chassis sensors/services"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
@@ -31,6 +31,7 @@ do_compile() {
     `${STAGING_BINDIR_NATIVE}/pkg-config --libs fmt` \
     `${STAGING_BINDIR_NATIVE}/pkg-config --libs nlohmann-json` \
     -o status
+
 }
 
 do_install() {

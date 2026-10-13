@@ -56,6 +56,10 @@ struct sensorElement {
     std::string sensorName;
     std::string directory;
     std::string directory_path;
+    double highthresh;
+    double lowthresh;
+    double warnhighthresh;
+    double warnlowthresh;
     bool first;
     directoryContents conts;
     directoryVals vals;
@@ -75,6 +79,7 @@ class Temp_Sensor {
         std::vector<std::string> explore_dir();
         int get_file_conts();
         nlohmann::json readJson(std::string path);
+        bool writeConfigJson();
         
         void expose_reading(const sensorElement& tempS);
         void update_reading();
@@ -94,6 +99,5 @@ class Temp_Sensor {
         boost::asio::steady_timer timer;
         std::unordered_map<std::string, sensorElement> sensorItems;
 
-        nlohmann::json limitJson;
         nlohmann::json configJson;
 };

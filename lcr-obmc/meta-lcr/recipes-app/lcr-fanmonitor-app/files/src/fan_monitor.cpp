@@ -65,6 +65,89 @@ void fan_monitor::fan_enable(std::string fen_path) {
     writingfile << 1;
 }
 
+void fan_monitor::pwmflag_enable(std::string pen_path) {
+    std::ofstream writingfile(pen_path);
+    writingfile << 1;
+}
+
+namespace fs = std::filesystem;
+
+bool isValidDirectory(const std::string& directory) {
+    // std::string path = "/sys/class/hwmon/" + directory + "/";
+    if (!fs::is_directory(directory)) {
+        return false;
+    };
+    for (const auto& entry : fs::directory_iterator(directory)) {
+        if (entry.is_regular_file()) {
+            std::string filePath = entry.path().string();
+
+            if (entry.path().filename() == "name") {
+                std::ifstream file(filePath);
+                if (file.is_open()) {
+                    std::string content;
+                    std::getline(file, content);  // read one line
+                
+                    // remove any trailing '\r' or '\n' just in case
+                    content.erase(std::remove(content.begin(), content.end(), '\n'), content.end());
+                    content.erase(std::remove(content.begin(), content.end(), '\r'), content.end());
+                    //dbgFile << "[" << currentTimestamp() << "] " << "LCR:TEMP: Content of name file: " << content << std::endl;
+                    if (content == "max31790") {
+                        return true;
+                    }
+                } else {
+                    ;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+std::vector<std::string> fan_monitor::explore_dir() 
+{
+    std::vector<std::string> directories;
+    std::string path = "/sys/class/hwmon/";
+    for (const auto& entry : fs::directory_iterator(path)) {
+
+        if (isValidDirectory(entry.path().string())) {
+
+            directories.push_back(entry.path().string());
+        }
+    }
+    return directories;
+}
+
+std::optional<std::tuple<int, int>> fan_monitor::get_hwmon_i2c_bus_addr(const std::string& hwmon_dir)
+{
+    fs::path device_link = fs::path(hwmon_dir) / "device";
+
+    if (!fs::exists(device_link) || !fs::is_symlink(device_link)) {
+        return std::nullopt;
+    }
+
+    std::error_code ec;
+    fs::path resolved = fs::canonical(device_link, ec);
+    if (ec) {
+        return std::nullopt;
+    }
+
+    // Last component is always bus-addr for an I2C client
+    std::string leaf = resolved.filename().string();   // example 1-002f
+    auto dash = leaf.find('-');
+    if (dash == std::string::npos) {
+        return std::nullopt;
+    }
+
+    try {
+        int bus  = std::stoi(leaf.substr(0, dash));
+        int addr = std::stoi(leaf.substr(dash + 1), nullptr, 16); // hex to int
+        phosphor::logging::log<phosphor::logging::level::INFO>(("fan_monitor bus found " + std::to_string(bus) + " and address " + std::to_string(addr)).c_str());
+        return std::make_tuple(bus, addr);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
 fan_monitor::fan_monitor(std::shared_ptr<sdbusplus::asio::connection> conn_ref,sdbusplus::asio::object_server& server_ref) : 
                         conn(conn_ref), obj_server(server_ref), timer(conn->get_io_context())                         
 {
@@ -72,27 +155,59 @@ fan_monitor::fan_monitor(std::shared_ptr<sdbusplus::asio::connection> conn_ref,s
     obj_server.add_manager("/xyz/openbmc_project/sensors");
     phosphor::logging::log<phosphor::logging::level::INFO>("fan_monitor init enter");
 
-    limitJson = readJson("/usr/share/thresholds/thresholds.json");
-    configJson = readJson("/usr/share/lcr_configs/bus_devices_standalone.json");
+    configJson = readJson("/usr/share/lcr_configs/bus_devices.json");
 
+    std::unordered_map<std::string, std::tuple<int, int>> bus_addr;
     for (auto& fan_dir : configJson["fancontrollers"].items()) {
         phosphor::logging::log<phosphor::logging::level::INFO>(("fan_monitor directory " + fan_dir.key()).c_str());
-        for (auto& fan_inst : fan_dir.value().items()) {
-            int num = configJson["fancontrollers"][fan_dir.key()][fan_inst.key()]["dir"].get<int>();
-            std::string pwm_path =    "/sys/class/hwmon/" + fan_dir.key() + "/pwm" + std::to_string(num);
-            std::string pen_path =    "/sys/class/hwmon/" + fan_dir.key() + "/pwm" + std::to_string(num) + "_enable";
-            std::string fen_path =    "/sys/class/hwmon/" + fan_dir.key() + "/fan" + std::to_string(num) + "_enable";
-            std::string tach_path =   "/sys/class/hwmon/" + fan_dir.key() + "/fan" + std::to_string(num) + "_input";
-            std::string fault_path =  "/sys/class/hwmon/" + fan_dir.key() + "/fan" + std::to_string(num) + "_fault";
-            std::string target_path = "/sys/class/hwmon/" + fan_dir.key() + "/fan" + std::to_string(num) + "_target";
-            int pwm_init =     read_controller_val(pwm_path);
-            int tach_init =    read_controller_val(tach_path);
-            int pwm_enable =   read_controller_val(pen_path);
-            int tach_enable =  read_controller_val(fen_path);
-            std::string name = fan_inst.key();
-            fan_enable(fen_path);
-            fanItems[name] = std::make_unique<fan_element>(pwm_path, tach_path, pen_path, fen_path, fault_path, target_path, 
-                                                            name, pwm_init, tach_init, num, pwm_enable, tach_enable, true);
+        bus_addr[fan_dir.key()] = std::make_tuple(configJson["fancontrollers"][fan_dir.key()]["bus"].get<int>(), configJson["fancontrollers"][fan_dir.key()]["address"].get<int>());
+    }
+
+    std::vector<std::string> directories = explore_dir();
+    for (std::string d : directories) {
+        auto dir_bus_addr = get_hwmon_i2c_bus_addr(d);
+        if (!dir_bus_addr) {
+            phosphor::logging::log<phosphor::logging::level::WARNING>(
+                ("Could not determine I2C bus/addr for " + d).c_str());
+            continue;
+        }
+    
+        for (auto const& [name, i2c_tuple] : bus_addr) {
+            if (i2c_tuple == dir_bus_addr) {
+                phosphor::logging::log<phosphor::logging::level::INFO>(("fan_monitor directory name " + name + " address exists in json").c_str());
+                for (auto& fan_inst : configJson["fancontrollers"][name].items()) {
+                    if (fan_inst.key() != "bus" && fan_inst.key() != "address" && fan_inst.key() != "pwm_bitmax") {
+                        int num = configJson["fancontrollers"][name][fan_inst.key()]["dir"].get<int>();
+                        std::string pwm_path =    d + "/pwm" + std::to_string(num);
+                        std::string pen_path =    d + "/pwm" + std::to_string(num) + "_enable";
+                        std::string fen_path =    d + "/fan" + std::to_string(num) + "_enable";
+                        std::string tach_path =   d + "/fan" + std::to_string(num) + "_input";
+                        std::string fault_path =  d + "/fan" + std::to_string(num) + "_fault";
+                        std::string target_path = d + "/fan" + std::to_string(num) + "_target";
+                        int pwm_init =     read_controller_val(pwm_path);
+                        int tach_init =    read_controller_val(tach_path);
+                        int pwm_enable =   read_controller_val(pen_path);
+                        int tach_enable =  read_controller_val(fen_path);
+                        int pwm_bitmax =   configJson["fancontrollers"][name]["pwm_bitmax"].get<int>();
+                        std::string fan_name = fan_inst.key();
+                        fan_enable(fen_path);
+                        if (fs::exists(pwm_path)) {
+                            fanItems[fan_name] = std::make_unique<fan_element>(pwm_path, tach_path, pen_path, fen_path, fault_path, target_path, 
+                                                                                fan_name, pwm_init, tach_init, num, pwm_enable, tach_enable, pwm_bitmax, true);
+                            fanItems[fan_name]->highthresh     = configJson["fancontrollers"][name][fan_name]["thresholds"]["critmax"].get<int>();
+                            fanItems[fan_name]->lowthresh      = configJson["fancontrollers"][name][fan_name]["thresholds"]["critmin"].get<int>();
+                            fanItems[fan_name]->warnhighthresh = configJson["fancontrollers"][name][fan_name]["thresholds"]["warnmax"].get<int>();
+                            fanItems[fan_name]->warnlowthresh  = configJson["fancontrollers"][name][fan_name]["thresholds"]["warnmin"].get<int>();
+                            fanItems[fan_name]->parentName = name;
+                            pwmflag_enable(pen_path);
+                        } else {
+                            phosphor::logging::log<phosphor::logging::level::INFO>(("fan_monitor pwm path : " + pwm_path + " does not exist").c_str());
+                        } 
+                    }
+                }
+            } else {
+                phosphor::logging::log<phosphor::logging::level::INFO>(("fan_monitor directory name " + name + " DOES NOT exist in json").c_str());
+            }
         }
     }
 
@@ -103,6 +218,19 @@ fan_monitor::fan_monitor(std::shared_ptr<sdbusplus::asio::connection> conn_ref,s
 fan_monitor::~fan_monitor()
 {
     ;
+}
+
+bool fan_monitor::writeConfigJson() {
+
+    std::ofstream outJSON("/usr/share/lcr_configs/bus_devices.json");
+    if (!outJSON.is_open()) {
+        std::cerr << "Failed to open file for writing!\n";
+        return false;
+    }
+
+    outJSON << std::setw(4) << configJson << std::endl; 
+    outJSON.close();
+    return true;
 }
 
 void fan_monitor::expose_readings() {
@@ -134,7 +262,7 @@ void fan_monitor::expose_readings() {
         
                 if (requested_value == current_value) {
                     // No change - don't emit signal
-                    return false;
+                    return true;
                 }
         
                 // Update internal D-Bus value and map
@@ -165,24 +293,38 @@ void fan_monitor::expose_readings() {
                 // Getter: Retrieve from map
                 auto it = fanItems.find(name);
                 if (it != fanItems.end()) {
-                    // phosphor::logging::log<phosphor::logging::level::INFO>(("Internal value of " + name + " is currently " + std::to_string(it->second->pwm)).c_str());
-                    // phosphor::logging::log<phosphor::logging::level::INFO>(("percentage is currently " + std::to_string(((double)((double)(it->second->pwm) / 255.0) * 100.0))).c_str());
-                    return ((double)((double)(it->second->pwm) / 255.0) * 100.0);
+                    return ((double)((double)(it->second->pwm) / it->second->pwm_bitmax) * 100.0);
                 }
                 return -1;  // Fallback
             }
         );
-        // Register other required properties for Sensor.Value with defaults
-        pwm_sense_iface->register_property_r<double>(
-            "MaxValue",
-            sdbusplus::vtable::property_::const_,
-            [](const auto&) { return 100.0; }
+
+        pwm_sense_iface->register_property_r<int>(
+            "PWM_Value",
+            sdbusplus::vtable::property_::emits_change,
+            [this, name = fan->name](const int&) -> int {
+                // Getter: Retrieve from map
+                auto it = fanItems.find(name);
+                if (it != fanItems.end()) {
+                    return ((int)it->second->pwm);
+                }
+                return -1;  // Fallback
+            }
         );
-        pwm_sense_iface->register_property_r<double>(
-            "MinValue",
-            sdbusplus::vtable::property_::const_,
-            [](const auto&) { return 0.0; }
+
+        pwm_sense_iface->register_property_r<int>(
+            "PWM_Bitmax",
+            sdbusplus::vtable::property_::emits_change,
+            [this, name = fan->name](const int&) -> int {
+                // Getter: Retrieve from map
+                auto it = fanItems.find(name);
+                if (it != fanItems.end()) {
+                    return ((int)it->second->pwm_bitmax);
+                }
+                return -1;  // Fallback
+            }
         );
+
         pwm_sense_iface->register_property_r<std::string>(
             "Unit",
             sdbusplus::vtable::property_::const_,
@@ -209,24 +351,83 @@ void fan_monitor::expose_readings() {
             }
         );
 
-        tach_crit_thresh_iface->register_property_r<double>(
+        tach_crit_thresh_iface->register_property_rw<int>(
             "CriticalHigh",
-            sdbusplus::vtable::property_::const_,
-            [this, &fan](const auto&) { return double(limitJson[fan->name]["critmax"]); }
+            sdbusplus::vtable::property_::emits_change,
+            [this, name = fan->name](const int& requested_value, int& current_value) -> bool {
+                // Setter: Validate/update stored status
+                auto it = fanItems.find(name);
+                if (it == fanItems.end()) {
+                    return false;
+                }
+        
+                if (requested_value == current_value) {
+                    // No change - don't emit signal
+                    return true;
+                }
+        
+                // Update internal D-Bus value and map
+                current_value = requested_value;
+                it->second->highthresh = requested_value;
+        
+                configJson["fancontrollers"][it->second->parentName][name]["thresholds"]["critmax"] = requested_value;
+                writeConfigJson();
+
+                // Success with change - emit signal
+                return true;
+            },
+            [this, name = fan->name](const int&) -> int {
+                auto it = fanItems.find(name);
+                if (it != fanItems.end()) {
+                    return it->second->highthresh;
+                }
+                return 10000;  // Fallback
+            }
         );
-        tach_crit_thresh_iface->register_property_r<double>(
+    
+        tach_crit_thresh_iface->register_property_rw<int>(
             "CriticalLow",
-            sdbusplus::vtable::property_::const_,
-            [this, &fan](const auto&) { return double(limitJson[fan->name]["critmin"]); }
+            sdbusplus::vtable::property_::emits_change,
+            [this, name = fan->name](const int& requested_value, int& current_value) -> bool {
+                // Setter: Validate/update stored status
+                auto it = fanItems.find(name);
+                if (it == fanItems.end()) {
+                    return false;
+                }
+        
+                if (requested_value == current_value) {
+                    // No change - don't emit signal
+                    return true;
+                }
+        
+                // Update internal D-Bus value and map
+                current_value = requested_value;
+                it->second->lowthresh = requested_value;
+        
+                configJson["fancontrollers"][it->second->parentName][name]["thresholds"]["critmin"] = requested_value;
+                writeConfigJson();
+        
+    
+                // Success with change - emit signal
+                return true;
+            },
+            [this, name = fan->name](const int&) -> int {
+                auto it = fanItems.find(name);
+                if (it != fanItems.end()) {
+                    return it->second->lowthresh;
+                }
+                return -5000;  // Fallback
+            }
         );
+
         tach_crit_thresh_iface->register_property_r<bool>(
             "CriticalAlarmHigh",
             sdbusplus::vtable::property_::emits_change,  // Changed to emits_change
             [this, name = fan->name](const auto&) {
                 auto it = fanItems.find(name);
                 if (it != fanItems.end()) {
-                    double cur_val = std::abs((double)it->second->tach);
-                    return cur_val > std::abs(limitJson[name]["critmax"].get<double>());
+                    int cur_val = it->second->tach;
+                    return cur_val > it->second->highthresh;
                 }
                 return false;
             }
@@ -237,32 +438,90 @@ void fan_monitor::expose_readings() {
             [this, name = fan->name](const auto&) {
                 auto it = fanItems.find(name);
                 if (it != fanItems.end()) {
-                    double cur_val = std::abs((double)it->second->tach);
-                    return cur_val <= std::abs(limitJson[name]["critmin"].get<double>());
+                    int cur_val = it->second->tach;
+                    return cur_val <= it->second->lowthresh;
                 }
                 return false;
             }
         );
         // xyz.openbmc_project.Sensor.Value.Unit.RPMS
 
-        tach_warn_thresh_iface->register_property_r<double>(
+        tach_warn_thresh_iface->register_property_rw<int>(
             "WarningHigh",
-            sdbusplus::vtable::property_::const_,
-            [this, &fan](const auto&) { return double(limitJson[fan->name]["warnmax"]); }
+            sdbusplus::vtable::property_::emits_change,
+            [this, name = fan->name](const int& requested_value, int& current_value) -> bool {
+                // Setter: Validate/update stored status
+                auto it = fanItems.find(name);
+                if (it == fanItems.end()) {
+                    return false;
+                }
+        
+                if (requested_value == current_value) {
+                    // No change - don't emit signal
+                    return true;
+                }
+        
+                // Update internal D-Bus value and map
+                current_value = requested_value;
+                it->second->warnhighthresh = requested_value;
+        
+                configJson["fancontrollers"][it->second->parentName][name]["thresholds"]["warmmax"] = requested_value;
+                writeConfigJson();
+        
+                // Success with change - emit signal
+                return true;
+            },
+            [this, name = fan->name](const int&) -> int {
+                auto it = fanItems.find(name);
+                if (it != fanItems.end()) {
+                    return it->second->warnhighthresh;
+                }
+                return 10000;  // Fallback
+            }
         );
-        tach_warn_thresh_iface->register_property_r<double>(
+    
+        tach_warn_thresh_iface->register_property_rw<int>(
             "WarningLow",
-            sdbusplus::vtable::property_::const_,
-            [this, &fan](const auto&) { return double(limitJson[fan->name]["warnmin"]); }
+            sdbusplus::vtable::property_::emits_change,
+            [this, name = fan->name](const int& requested_value, int& current_value) -> bool {
+                // Setter: Validate/update stored status
+                auto it = fanItems.find(name);
+                if (it == fanItems.end()) {
+                    return false;
+                }
+        
+                if (requested_value == current_value) {
+                    // No change - don't emit signal
+                    return true;
+                }
+        
+                // Update internal D-Bus value and map
+                current_value = requested_value;
+                it->second->warnlowthresh = requested_value;
+        
+                configJson["fancontrollers"][it->second->parentName][name]["thresholds"]["warnmin"] = requested_value;
+                writeConfigJson();
+        
+                // Success with change - emit signal
+                return true;
+            },
+            [this, name = fan->name](const int&) -> int {
+                auto it = fanItems.find(name);
+                if (it != fanItems.end()) {
+                    return it->second->warnlowthresh;
+                }
+                return -5000;  // Fallback
+            }
         );
+
         tach_warn_thresh_iface->register_property_r<bool>(
             "WarningAlarmHigh",
             sdbusplus::vtable::property_::emits_change,  // Changed to emits_change
             [this, name = fan->name](const auto&) {
                 auto it = fanItems.find(name);
                 if (it != fanItems.end()) {
-                    double cur_val = std::abs((double)it->second->tach);
-                    return cur_val > std::abs(limitJson[name]["warnmax"].get<double>());
+                    int cur_val = it->second->tach;
+                    return cur_val > it->second->warnhighthresh;
                 }
                 return false;
             }
@@ -273,41 +532,30 @@ void fan_monitor::expose_readings() {
             [this, name = fan->name](const auto&) {
                 auto it = fanItems.find(name);
                 if (it != fanItems.end()) {
-                    double cur_val = std::abs((double)it->second->tach);
-                    return cur_val <= std::abs(limitJson[name]["warnmin"].get<double>());
+                    int cur_val = it->second->tach;
+                    return cur_val <= it->second->warnlowthresh;
                 }
                 return false;
             }
         );
 
         // tach_sense_iface
-        tach_sense_iface->register_property_r<double>(
+        tach_sense_iface->register_property_r<int>(
             "Value",
             sdbusplus::vtable::property_::emits_change,
-            [this, name = fan->name](const double&) -> double {
+            [this, name = fan->name](const int&) -> int {
                 // Getter: Retrieve from map
                 auto it = fanItems.find(name);
                 if (it != fanItems.end()) {
                     // phosphor::logging::log<phosphor::logging::level::INFO>(
                         // ("Internal tach value of " + name + " is currently " + std::to_string(it->second->tach)).c_str()
                     // );
-                    return (double)it->second->tach;
+                    return it->second->tach;
                 }
                 return -1;  // Fallback
             }
         );
 
-        // Register other required properties for Sensor.Value with defaults
-        tach_sense_iface->register_property_r<double>(
-            "MaxValue",
-            sdbusplus::vtable::property_::const_,
-            [](const auto&) { return double(25000); }
-        );
-        tach_sense_iface->register_property_r<double>(
-            "MinValue",
-            sdbusplus::vtable::property_::const_,
-            [](const auto&) { return double(0); }
-        );
         tach_sense_iface->register_property_r<std::string>(
             "Unit",
             sdbusplus::vtable::property_::const_,
@@ -357,7 +605,7 @@ void fan_monitor::update_readings() {
         return;
     }
 
-    // Chain async reads over map (use vector of keys for ordering if needed; here assuming order doesn't matter)
+    // Chain async reads over map
     std::vector<std::string> keys;
     for (const auto& kv : fanItems) { keys.push_back(kv.first); }
 
@@ -474,8 +722,6 @@ void fan_monitor::async_update_pwm(const std::string& fan_name, std::function<vo
                 callback(0, 0);
             }
             
-            // phosphor::logging::log<phosphor::logging::level::INFO>("async_update_pwm getting current reading");
-            
             writingfile << fan_ptr->pwm;
             
             // phosphor::logging::log<phosphor::logging::level::INFO>("async_update_pwm callback");
@@ -483,7 +729,7 @@ void fan_monitor::async_update_pwm(const std::string& fan_name, std::function<vo
         } catch (const std::exception& e) {
             // On error, don't update cur_reading (already not updated), log, and callback with error value
             uint64_t error_value = 0;
-            uint64_t old_value = 0;  // Or fetch actual old if needed; using error for consistency
+            uint64_t old_value = 0;  
             phosphor::logging::log<phosphor::logging::level::ERR>(("Failed to read sensor " + fan_name + ": " + e.what()).c_str());
             callback(old_value, error_value);
         }
@@ -508,22 +754,16 @@ void fan_monitor::async_update_bus_tach(const std::string& fan_name, int old_val
             // phosphor::logging::log<phosphor::logging::level::INFO>(("async_update_bus_tach attempting to update bus for " + fan_name).c_str());
             viface->signal_property("Value");  // Always signal Value change
         }
-        nlohmann::json local_limitJson = readJson("/usr/share/thresholds/thresholds.json");
 
         // Extract thresholds with error handling (see mitigations below)
         int highthresh = 0.0;  // Default/fallback
         int lowthresh = 0.0;   // Default/fallback
         int warnhighthresh = 0.0;  // Default/fallback
         int warnlowthresh = 0.0;   // Default/fallback
-        try {
-            highthresh = local_limitJson[fan_name]["critmax"];
-            lowthresh = local_limitJson[fan_name]["critmin"];
-            warnhighthresh = local_limitJson[fan_name]["warnmax"];
-            warnlowthresh = local_limitJson[fan_name]["warnmin"];
-        } catch (const nlohmann::json::exception& e) {
-            phosphor::logging::log<phosphor::logging::level::ERR>(("Failed to parse thresholds JSON: " + std::string(e.what())).c_str());
-            return;
-        }
+        highthresh     = fan_ptr->highthresh;
+        lowthresh      = fan_ptr->lowthresh;
+        warnhighthresh = fan_ptr->warnhighthresh;
+        warnlowthresh  = fan_ptr->warnlowthresh;
 
         // phosphor::logging::log<phosphor::logging::level::INFO>("async_update_bus finished setting signals");
         bool old_warn_alarm_high = std::abs(old_val) >= std::abs(warnhighthresh);
@@ -601,7 +841,7 @@ void fan_monitor::async_update_bus_pwm(const std::string& fan_name, uint64_t old
 }
 
 void fan_monitor::schedule_update() {
-    timer.expires_after(std::chrono::milliseconds(1000));
+    timer.expires_after(std::chrono::milliseconds(100));
     timer.async_wait([this](const boost::system::error_code& ec) {
         if (ec) {
             phosphor::logging::log<phosphor::logging::level::INFO>("fan_monitor schedule_update async wait failure. failed to schedule update");

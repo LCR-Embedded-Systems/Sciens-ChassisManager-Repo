@@ -6,6 +6,7 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <numeric>
 #include <condition_variable>
 #include <mutex>
 #include <queue>
@@ -36,7 +37,6 @@
 
 namespace fs = std::filesystem;
 
-extern std::ofstream ADC_dbgFile;
 
 std::string currentTimestamp();
 

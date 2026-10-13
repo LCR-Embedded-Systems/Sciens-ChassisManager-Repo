@@ -63,6 +63,20 @@ static constexpr size_t chassisIdentifyReqLength = 2;
 static constexpr size_t identifyIntervalPos = 0;
 static constexpr size_t forceIdentifyPos = 1;
 
+nlohmann::json readJson(std::string path) {
+    std::ifstream f(path);
+
+    nlohmann::json read;
+
+    try {
+        f >> read;
+    } catch (const nlohmann::json::parse_error& e) {
+        std::cerr << "JSON parse error: " << e.what() << std::endl;
+    }
+
+    return read;
+}
+
 namespace ipmi
 {
 constexpr Cc ccParmNotSupported = 0x80;
@@ -603,11 +617,13 @@ ipmi::RspType<bool,    // chassis intrusion sensor
               >
     ipmiGetChassisCap()
 {
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: ipmiGetChassisCap command running now");
     ipmi::PropertyMap properties;
     try
     {
         sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
 
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: ipmiGetChassisCap chassis capabilities string: " + std::string(chassisCapIntf)).c_str());
         ipmi::DbusObjectInfo chassisCapObject =
             ipmi::getDbusObject(bus, chassisCapIntf);
 
@@ -937,6 +953,7 @@ static constexpr uint8_t allSupport = 0x01 | 0x02 | 0x04;
  */
 std::optional<uint2_t> getPowerRestorePolicy()
 {
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getPowerRestorePolicy enter");
     uint2_t restorePolicy = 0;
     using namespace chassis::internal;
 
@@ -944,12 +961,19 @@ std::optional<uint2_t> getPowerRestorePolicy()
 
     try
     {
-        const auto& powerRestoreSetting =
-            objects.map.at(powerRestoreIntf).front();
+        // const auto& powerRestoreSetting = 
+        //     objects.map.at(powerRestoreIntf).front();
+
+        const auto& powerRestoreSetting = 
+            "/xyz/openbmc_project/control/host0/power_restore_policy";
+
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getPowerRestorePolicy power restore path " + std::string(powerRestoreSetting)).c_str());
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getPowerRestorePolicy power restore interface " + std::string(powerRestoreIntf)).c_str());
+    
         ipmi::Value result = ipmi::getDbusProperty(
             *getSdBus(),
             objects.service(powerRestoreSetting, powerRestoreIntf).c_str(),
-            powerRestoreSetting.c_str(), powerRestoreIntf,
+            powerRestoreSetting, powerRestoreIntf,
             "PowerRestorePolicy");
         auto powerRestore = RestorePolicy::convertPolicyFromString(
             std::get<std::string>(result));
@@ -974,6 +998,7 @@ std::optional<uint2_t> getPowerRestorePolicy()
  */
 std::optional<bool> getPowerStatus()
 {
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getPowerStatus enter");
     bool powerGood = false;
     std::shared_ptr<sdbusplus::asio::connection> busp = getSdBus();
     try
@@ -988,6 +1013,8 @@ std::optional<bool> getPowerStatus()
         ipmi::Value powerState =
             ipmi::getDbusProperty(*busp, service, chassisStatePath,
                                   chassisStateIntf, "CurrentPowerState");
+        
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getPowerStatus retrieved state " + std::get<std::string>(powerState)).c_str());
         powerGood = std::get<std::string>(powerState) ==
                     "xyz.openbmc_project.State.Chassis.PowerState.On";
     }
@@ -1005,6 +1032,8 @@ std::optional<bool> getPowerStatus()
 
             ipmi::Value variant = ipmi::getDbusProperty(
                 *busp, service, legacyPwrCtrlObj, legacyPwrCtrlIntf, "pgood");
+            
+            phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getPowerStatus (backup) retrieved state " + std::to_string(std::get<int>(variant))).c_str());
             powerGood = static_cast<bool>(std::get<int>(variant));
         }
         catch (const std::exception& e)
@@ -1014,6 +1043,7 @@ std::optional<bool> getPowerStatus()
             return std::nullopt;
         }
     }
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getPowerStatus exit");
     return std::make_optional(powerGood);
 }
 
@@ -1024,6 +1054,7 @@ std::optional<bool> getPowerStatus()
  */
 bool getACFailStatus()
 {
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getACFailStatus enter");
     constexpr const char* powerControlObj =
         "/xyz/openbmc_project/Chassis/Control/Power0";
     constexpr const char* powerControlIntf =
@@ -1053,13 +1084,19 @@ bool getACFailStatus()
 static std::optional<bool> getButtonEnabled(const std::string& buttonPath,
                                             const std::string& buttonIntf)
 {
+    
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getButtonEnabled enter for " + std::string(buttonPath) + " and " + std::string(buttonIntf)).c_str());
     std::shared_ptr<sdbusplus::asio::connection> busp = getSdBus();
     bool buttonDisabled = false;
     try
     {
+        
+        log<level::INFO>("LCR:IPMID: getButtonEnabled getting service");
         auto service = ipmi::getService(*busp, buttonIntf, buttonPath);
+        log<level::INFO>(("LCR:IPMID: getButtonEnabled getting dbus property for service " + std::string(service)).c_str());
         ipmi::Value enabled = ipmi::getDbusProperty(*busp, service, buttonPath,
                                                     buttonIntf, "Enabled");
+        log<level::INFO>("LCR:IPMID: getButtonEnabled attempting to get the enabled flag");
         buttonDisabled = !std::get<bool>(enabled);
     }
     catch (const sdbusplus::exception_t& e)
@@ -1162,6 +1199,8 @@ ipmi::RspType<bool,    // Power is on
               >
     ipmiGetChassisStatus(ipmi::Context::ptr& ctx)
 {
+    
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: ipmiGetChassisStatus enter ");
     using namespace chassis::internal;
     std::optional<uint2_t> restorePolicy =
         power_policy::getPowerRestorePolicy();
@@ -1171,6 +1210,10 @@ ipmi::RspType<bool,    // Power is on
         return ipmi::responseUnspecifiedError();
     }
 
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: ipmiGetChassisStatus power button path " + std::string(powerButtonPath)).c_str());
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: ipmiGetChassisStatus power button interface " + std::string(powerButtonIntf)).c_str());
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: ipmiGetChassisStatus reset button path " + std::string(resetButtonPath)).c_str());
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: ipmiGetChassisStatus reset button interface " + std::string(resetButtonIntf)).c_str());
     //  Front Panel Button Capabilities and disable/enable status(Optional)
     std::optional<bool> powerButtonReading =
         getButtonEnabled(powerButtonPath, powerButtonIntf);
@@ -1204,6 +1247,8 @@ ipmi::RspType<bool,    // Power is on
     {
         chassisIntrusionActive = chassisIntrusionStatus.value();
     }
+
+    nlohmann::json chassis_fru_config = readJson("/usr/share/chassis_FRU_dir/chassis_FRU_information.json");
 
     // This response has a lot of hard-coded, unsupported fields
     // They are set to false or 0

@@ -13,6 +13,11 @@ IPMBLinkSensor::IPMBLinkSensor(std::shared_ptr<sdbusplus::asio::connection> conn
     obj_server.add_manager("/xyz/openbmc_project/sensors");
     phosphor::logging::log<phosphor::logging::level::INFO>("IPMBLinkSensor initialization");
     sensor_path = "/xyz/openbmc_project/sensors/mandatoryNumbers/VSO_IPMB_LINK";
+    uint8_t ipmb_b_status;
+    ipmb_b_status |= (1 << 7);
+    ipmb_b_status |= (1 << 3);
+    current_value = static_cast<double>(ipmb_b_status);
+    byte3 = static_cast<double>(1 << 5);
 }
 
 IPMBLinkSensor::~IPMBLinkSensor() {
@@ -44,7 +49,17 @@ void IPMBLinkSensor::expose_sensor() {
         sdbusplus::vtable::property_::emits_change,
         [this](const auto&) { return current_value; }
     );
+    value_iface->register_property_r<double>(
+        "Byte3",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const auto&) { return byte3; }
+    );
 
+    value_iface->register_property_r<double>(
+        "Byte4",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const auto&) { return byte4; }
+    );
     // Register other required properties for Sensor.Value with defaults
     value_iface->register_property_r<int64_t>(
         "MaxValue",
@@ -88,10 +103,10 @@ void IPMBLinkSensor::expose_sensor() {
 
 void IPMBLinkSensor::async_update_interface() {
     // phosphor::logging::log<phosphor::logging::level::INFO>("IPMBLinkSensor async_update_interface enter");
-    async_get_all_alarms_status([this](uint8_t val) {
+    async_get_ipmb_status([this](uint8_t val) {
         double new_val = static_cast<double>(val);
-        if (new_val != this->current_value) {
-            this->current_value = new_val;
+        if (new_val != this->byte4) {
+            this->byte4 = new_val;
             if (this->value_iface) {
                 this->emit_value_changed();
             }
@@ -114,42 +129,64 @@ void IPMBLinkSensor::schedule_update() {
     // phosphor::logging::log<phosphor::logging::level::INFO>("IPMBLinkSensor schedule_update exit");
 }
 
-// Asynchronous get_all_alarms_status with short-circuit on first alarm
-void IPMBLinkSensor::async_get_all_alarms_status(std::function<void(uint8_t)> callback) {
-    // phosphor::logging::log<phosphor::logging::level::INFO>("IPMBLinkSensor async_get_all_alarms_status enter");
-    std::string threshold_interface = "xyz.openbmc_project.Sensor.Threshold.Critical";
-    std::string tempstub = "/xyz/openbmc_project/sensors/temperature";
-    std::string tachstub = "/xyz/openbmc_project/sensors/fan_tach";
-    std::string adcstub = "/xyz/openbmc_project/sensors/voltage";
+// Asynchronous async_get_ipmb_status with short-circuit on first alarm
+void IPMBLinkSensor::async_get_ipmb_status(std::function<void(uint8_t)> callback) {
+    
+    uint8_t result = 0x00;  // default = no flag / normal
 
-    std::vector<std::string> stubs = {tempstub, tachstub, adcstub}; stubs = {tempstub, tachstub, adcstub};
-    auto check_next = std::make_shared<size_t>(0);
-    auto alarm_active = std::make_shared<bool>(false);
-
-    auto done = [callback, alarm_active]() {
-        callback(*alarm_active ? 0x02 : 0x01);
-    };
-
-    auto check_ptr = std::make_shared<std::function<void()> >();
-    *check_ptr = [this, stubs, check_next, alarm_active, done, threshold_interface, check_ptr]() mutable {
-        if (*alarm_active || *check_next >= stubs.size()) {
-            // phosphor::logging::log<phosphor::logging::level::INFO>("IPMBLinkSensor async_get_all_alarms_status finished checking alarms. running done");
-            done();
-            return;
-        }
-        std::string stub = stubs[*check_next];
-        ++(*check_next);
-        phosphor::interface::util::async_alarm_check(conn, stub, threshold_interface, 0,
-            [alarm_active, check_ptr](bool res) {
-                if (res) {
-                    // phosphor::logging::log<phosphor::logging::level::INFO>("IPMBLinkSensor async_get_all_alarms_status an alarm is set");
-                    *alarm_active = true;
+    bool ipmb_a = false;
+    bool ipmb_b = false;
+    try {
+        std::ifstream file("/usr/share/ipmb_a_enable");
+        if (file.is_open()) {
+            int flag_value = 0;
+            if (file >> flag_value) {
+                if (flag_value == 1) {
+                    ipmb_a = true;  
+                } else {
+                    ipmb_a = false;
                 }
-                (*check_ptr)();
-            });
-    };
-    (*check_ptr)();
-    // phosphor::logging::log<phosphor::logging::level::INFO>("IPMBLinkSensor async_get_all_alarms_status exit");
+            }
+            file.close();
+        }
+    } catch (const std::exception& e) {
+        phosphor::logging::log<phosphor::logging::level::ERR>(
+            "Failed to read result_flag file",
+            phosphor::logging::entry("ERROR=%s", e.what()));
+    }
+
+    try {
+        std::ifstream file("/usr/share/ipmb_b_enable");
+        if (file.is_open()) {
+            int flag_value = 0;
+            if (file >> flag_value) {
+                if (flag_value == 1) {
+                    ipmb_b = true;  // flag is set, test passed
+                } else {
+                    ipmb_b = false;  // flag is 0, test failed
+                }
+            }
+            file.close();
+        }
+    } catch (const std::exception& e) {
+        phosphor::logging::log<phosphor::logging::level::ERR>(
+            "Failed to read result_flag file",
+            phosphor::logging::entry("ERROR=%s", e.what()));
+    }
+
+    if (ipmb_a && ipmb_b) {
+        result |= (1 << 3);
+    } else if (!ipmb_a && ipmb_b) {
+        result |= (1 << 2);
+    } else if (ipmb_a && !ipmb_b) {
+        result |= (1 << 1);
+    } else if (!ipmb_a && !ipmb_b) {
+        result |= (1);
+    }
+
+    // Call the callback with the result
+    callback(result);
+
 }
 
 // Start the asynchronous update cycle

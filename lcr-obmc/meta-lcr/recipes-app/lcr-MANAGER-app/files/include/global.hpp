@@ -1,3 +1,5 @@
+#pragma once
+
 #include <iostream>
 #include <iomanip>
 #include <vector>
@@ -34,6 +36,10 @@
 #include <sys/ioctl.h>
 #include <mtd/mtd-user.h>
 #include <cstring>
+#include <sdbusplus/asio/connection.hpp>
+#include <sdbusplus/asio/object_server.hpp>
+#include <boost/asio.hpp>
+#include <boost/asio/steady_timer.hpp>
 
 extern std::ofstream boot_dbgfile;
 extern std::ofstream system_logs;

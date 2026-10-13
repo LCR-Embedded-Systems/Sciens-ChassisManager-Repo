@@ -2,14 +2,46 @@
 
 using json = nlohmann::json;
 
-CLI::CLI() : bus(sdbusplus::bus::new_default()) {
+bool gpio_chip_exists(const std::string& chip_path) 
+{
+    try {
+        gpiod::chip chip(chip_path);
+        return true;
+    } catch (const std::system_error& e) {
+        if (e.code().value() == ENOENT ||    // No such file
+            e.code().value() == ENODEV ||     // No such device
+            e.code().value() == EACCES) {     // Permission denied
+            return false;
+        }
+        throw;
+    }
+}
+
+json readJson(std::string path) 
+{
+    std::ifstream f(path);
+
+    json read;
+
+    try {
+        f >> read;
+    } catch (const nlohmann::json::parse_error& e) {
+        std::cerr << "JSON parse error: " << e.what() << std::endl;
+    }
+    
+    return read;
+}
+
+CLI::CLI() : bus(sdbusplus::bus::new_default()) 
+{
     build_gpio_list();
+    configJson = readJson("/usr/share/lcr_configs/bus_devices.json");
 };
 
 CLI::~CLI() {;};
 
-
-gpio_info CLI::populate_info(bool input, int chip, int line, int status, std::string name) {
+gpio_info CLI::populate_info(bool input, int chip, int line, int status, std::string name) 
+{
     gpio_info populated_gpio;
     populated_gpio.input = input;
     populated_gpio.chip = chip;
@@ -20,68 +52,48 @@ gpio_info CLI::populate_info(bool input, int chip, int line, int status, std::st
     return populated_gpio;
 }
 
-void CLI::build_gpio_list() {
+void CLI::build_gpio_list() 
+{
 
-    BP_GPIO_OUT0 = populate_info(false, 0, 8, 0, std::string("BP_GPIO_OUT0"));
-    BP_GPIO_OUT1 = populate_info(false, 0, 9, 0, std::string("BP_GPIO_OUT1"));
-    BP_GPIO_OUT2 = populate_info(false, 0, 10, 0, std::string("BP_GPIO_OUT2"));
-    BP_GPIO_OUT3 = populate_info(false, 0, 11, 0, std::string("BP_GPIO_OUT3"));
-    BP_GPIO_OUT4 = populate_info(false, 0, 12, 0, std::string("BP_GPIO_OUT4"));
-    BP_GPIO_OUT5 = populate_info(false, 0, 13, 0, std::string("BP_GPIO_OUT5"));
-    BP_GPIO_OUT6 = populate_info(false, 0, 14, 0, std::string("BP_GPIO_OUT6"));
-    BP_GPIO_OUT7 = populate_info(false, 0, 15, 0, std::string("BP_GPIO_OUT7"));
-    
-    BP_GPIO_IN0 = populate_info(true, 0, 0, 0, std::string("BP_GPIO_IN0"));
-    BP_GPIO_IN1 = populate_info(true, 0, 1, 0, std::string("BP_GPIO_IN1"));
-    BP_GPIO_IN2 = populate_info(true, 0, 2, 0, std::string("BP_GPIO_IN2"));
-    BP_GPIO_IN3 = populate_info(true, 0, 3, 0, std::string("BP_GPIO_IN3"));
-    BP_GPIO_IN4 = populate_info(true, 0, 4, 0, std::string("BP_GPIO_IN4"));
-    BP_GPIO_IN5 = populate_info(true, 0, 5, 0, std::string("BP_GPIO_IN5"));
-    BP_GPIO_IN6 = populate_info(true, 0, 6, 0, std::string("BP_GPIO_IN6"));
-    BP_GPIO_IN7 = populate_info(true, 0, 7, 0, std::string("BP_GPIO_IN7"));
+    std::string path = "/xyz/openbmc_project/gpio";
+    std::string interface = "xyz.openbmc_project.Sensor.Value";
 
-    sysreset = populate_info(false, 1, 0, 0, std::string("sysreset"));
-    nvmro = populate_info(true, 2, 4, 0, std::string("nvmro"));
-    gdiscrete = populate_info(false, 2, 0, 0, std::string("gdiscrete"));
-    psenable = populate_info(false, 2, 3, 0, std::string("psenable"));
-    ps1inh = populate_info(false, 2, 2, 0, std::string("ps1inh"));
-    ps1fail = populate_info(true, 3, 0, 0, std::string("ps1fail")); //TODO find out
-    ps2inh = populate_info(false, 2, 1, 0, std::string("ps2inh"));
-    ps2fail = populate_info(true, 3, 1, 0, std::string("ps2fail")); //TODO find out
+    for (auto& gpiopath : phosphor::interface::util::getSubTreePathsRaw(bus, path, interface, 0)){
+        int chip_value = phosphor::interface::util::getProperty<int>(bus, gpiopath, interface, "Chip");
+        int line_value = phosphor::interface::util::getProperty<int>(bus, gpiopath, interface, "Line");
+        bool input_value = phosphor::interface::util::getProperty<bool>(bus, gpiopath, interface, "Input");
+        auto itr = gpiopath.rfind("/");
+        std::string gpioName;
+        if (itr != std::string::npos && itr < gpiopath.size())
+        {
+            gpioName = gpiopath.substr(1 + itr);
+        }
+        gpio_info newgpio = populate_info(input_value, chip_value, line_value, 0, gpioName);
 
-    available_gpios.push_back(BP_GPIO_OUT0);
-    available_gpios.push_back(BP_GPIO_OUT1);
-    available_gpios.push_back(BP_GPIO_OUT2);
-    available_gpios.push_back(BP_GPIO_OUT3);
-    available_gpios.push_back(BP_GPIO_OUT4);
-    available_gpios.push_back(BP_GPIO_OUT5);
-    available_gpios.push_back(BP_GPIO_OUT6);
-    available_gpios.push_back(BP_GPIO_OUT7);
+        available_gpios.push_back(newgpio);
+    }
 
-    available_gpios.push_back(BP_GPIO_IN0);
-    available_gpios.push_back(BP_GPIO_IN1);
-    available_gpios.push_back(BP_GPIO_IN2);
-    available_gpios.push_back(BP_GPIO_IN3);
-    available_gpios.push_back(BP_GPIO_IN4);
-    available_gpios.push_back(BP_GPIO_IN5);
-    available_gpios.push_back(BP_GPIO_IN6);
-    available_gpios.push_back(BP_GPIO_IN7);
+    sysreset =     populate_info(false, 1, 0, 0, std::string("sysreset"));
+    nvmro =        populate_info(true, 2, 0, 0, std::string("nvmro"));
+    gdiscrete =    populate_info(false, 3, 0, 0, std::string("gdiscrete"));
+    psenable =     populate_info(false, 3, 3, 0, std::string("psenable"));
+    ps1inh =       populate_info(false, 3, 2, 0, std::string("ps1inh"));
+    ps1fail =      populate_info(true, 4, 0, 0, std::string("ps1fail"));
+    ps2inh =       populate_info(false, 3, 1, 0, std::string("ps2inh"));
+    ps2fail =      populate_info(true, 4, 1, 0, std::string("ps2fail"));
 
     chassis_gpios.push_back(sysreset);
-    available_gpios.push_back(nvmro);
     chassis_gpios.push_back(nvmro);
     chassis_gpios.push_back(gdiscrete);
     chassis_gpios.push_back(psenable);
     chassis_gpios.push_back(ps1inh);
-    available_gpios.push_back(ps1fail);
     chassis_gpios.push_back(ps1fail);
     chassis_gpios.push_back(ps2inh);
-    available_gpios.push_back(ps2fail);
     chassis_gpios.push_back(ps2fail);
-
 }
 
-bool CLI::ischassisgpio(gpio_info* target_gpio) {
+bool CLI::ischassisgpio(gpio_info* target_gpio) 
+{
     for (auto& gpio : chassis_gpios) {
         if (gpio.name == target_gpio->name) {
             return true;
@@ -90,7 +102,8 @@ bool CLI::ischassisgpio(gpio_info* target_gpio) {
     return false;
 }
 
-gpio_info* CLI::get_gpio_by_name(const std::string& name) {
+gpio_info* CLI::get_gpio_by_name(const std::string& name) 
+{
     for (auto& gpio : available_gpios) {
         if (gpio.name == name) {
             return &gpio;
@@ -99,7 +112,8 @@ gpio_info* CLI::get_gpio_by_name(const std::string& name) {
     return nullptr;
 }
 
-gpio_info* CLI::get_chassis_gpio_by_name(const std::string& name) {
+gpio_info* CLI::get_chassis_gpio_by_name(const std::string& name) 
+{
     for (auto& gpio : chassis_gpios) {
         if (gpio.name == name) {
             return &gpio;
@@ -108,7 +122,8 @@ gpio_info* CLI::get_chassis_gpio_by_name(const std::string& name) {
     return nullptr;
 }
 
-void CLI::display_options(){
+void CLI::display_options()
+{
     std::cout << "Available commands are: " << std::endl;
     std::cout << "\tlist : list all pins and their direction" << std::endl;
     std::cout << "\tget : get the status of an output pin or the reading of an input pin" << std::endl;
@@ -118,7 +133,8 @@ void CLI::display_options(){
     std::cout << "\tall : retrieve the status of all pins, both input and output" << std::endl;
 }
 
-void CLI::display_PINs(){
+void CLI::display_PINs()
+{
     std::cout << "Input pins:" << std::endl;
 
     for (auto& gpio : available_gpios) {
@@ -136,7 +152,8 @@ void CLI::display_PINs(){
     }
 }
 
-int CLI::process_argument(int nargs, char* args[]) {
+int CLI::process_argument(int nargs, char* args[]) 
+{
 
     if (nargs > 1) {
         std::string argument = args[1];
@@ -323,7 +340,8 @@ int CLI::readgpio(gpio_info* target_gpio)
     }
 }
 
-int CLI::readdbusgpio(gpio_info* target_gpio) {
+int CLI::readdbusgpio(gpio_info* target_gpio) 
+{
     try {
 
         if (target_gpio == nullptr) {
@@ -349,7 +367,8 @@ int CLI::readdbusgpio(gpio_info* target_gpio) {
     }
 }
 
-void CLI::readallpins() {
+void CLI::readallpins() 
+{
     std::cout << "Input pins:" << std::endl;
 
     for (auto& gpio : available_gpios) {

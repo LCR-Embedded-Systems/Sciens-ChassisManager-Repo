@@ -1,0 +1,11 @@
+[Unit]
+Description=Chassis control and exposure Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/chcontrol
+Restart=always
+Type=simple
+
+[Install]
+WantedBy=multi-user.target

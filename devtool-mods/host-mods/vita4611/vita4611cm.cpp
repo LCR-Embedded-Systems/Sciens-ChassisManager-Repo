@@ -10,8 +10,10 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 using namespace phosphor::logging;
+namespace fs = std::filesystem;
 typedef std::tuple<int, uint8_t, uint8_t, uint8_t, uint8_t, std::vector<uint8_t>> ipmb_response_return_type_t;
 
+bool discovery_finished_flag = false;
 
 //////////////////////////////////////////////////
 
@@ -180,65 +182,6 @@ static auto callMethodAndRead(const std::string& busName,
     return callMethodAndRead<Ret>(getBus(), busName, path, interface,
                                     method, std::forward<Args>(args)...);
 }
-
-/** @brief Get subtree paths from the mapper without checking response. */
-// static auto getSubTreePathsRaw(sdbusplus::bus_t& bus,
-//     const std::string& path,
-//     const std::string& interface, int32_t depth)
-// {
-//     using namespace std::literals::string_literals;
-
-//     using Path = std::string;
-//     using Intf = std::string;
-//     using Intfs = std::vector<Intf>;
-//     using ObjectPaths = std::vector<Path>;
-//     Intfs intfs = {interface};
-
-//     return callMethodAndRead<ObjectPaths>(
-//         bus, "xyz.openbmc_project.ObjectMapper"s,
-//         "/xyz/openbmc_project/object_mapper"s,
-//         "xyz.openbmc_project.ObjectMapper"s, "GetSubTreePaths"s, path,
-//         depth, intfs);
-// }
-
-// /** @brief Get subtree paths from the mapper. */
-// static auto getSubTreePaths(sdbusplus::bus_t& bus, const std::string& path,
-//      const std::string& interface, int32_t depth)
-// {
-//     auto mapperResp = getSubTreePathsRaw(bus, path, interface, depth);
-//     if (mapperResp.empty())
-//     {
-//         phosphor::logging::log<phosphor::logging::level::ERR>(
-//             "Empty response from mapper GetSubTreePaths",
-//             phosphor::logging::entry("SUBTREE=%s", path.c_str()),
-//             phosphor::logging::entry("INTERFACE=%s", interface.c_str()),
-//             phosphor::logging::entry("DEPTH=%u", depth));
-//             phosphor::logging::elog<detail::errors::InternalFailure>();
-//     }
-//     return mapperResp;
-// }
-
-
-
-// /** @brief Get subtree from the mapper without checking response. */
-// static auto getSubTreeRaw(sdbusplus::bus_t& bus, const std::string& path,
-//     const std::string& interface, int32_t depth)
-// {
-//     using namespace std::literals::string_literals;
-
-//     using Path = std::string;
-//     using Intf = std::string;
-//     using Serv = std::string;
-//     using Intfs = std::vector<Intf>;
-//     using Objects = std::map<Path, std::map<Serv, Intfs>>;
-//     Intfs intfs = {interface};
-
-//     return callMethodAndRead<Objects>(bus,
-//                         "xyz.openbmc_project.ObjectMapper"s,
-//                         "/xyz/openbmc_project/object_mapper"s,
-//                         "xyz.openbmc_project.ObjectMapper"s,
-//                         "GetSubTree"s, path, depth, intfs);
-// }
 
 /** @brief Get service from the mapper without checking response. */
 static auto getServiceRaw(sdbusplus::bus_t& bus, const std::string& path,
@@ -418,9 +361,6 @@ finish:
     return isActive;
 }
 
-
-
-
 std::map<int, std::string> sensorUnitTypeCodes = {
     {0, "unknown"},
     {1, "degrees C"},
@@ -435,9 +375,6 @@ std::map<int, std::string> sensorUnitTypeCodes = {
     {10, "Nits"}
 };
 
-
-
-
 std::string currentTimestamp()
 {
     auto now = std::chrono::system_clock::now();
@@ -449,7 +386,8 @@ std::string currentTimestamp()
     return oss.str();
 }
 
-VITA4611Device* VITA4611_ChassisManager::findDeviceByAddress(uint8_t addr) {
+VITA4611Device* VITA4611_ChassisManager::findDeviceByAddress(uint8_t addr) 
+{
     for (const auto& [key, dev] : this->deviceMap) {
         if (dev && dev->ipmi_address == addr) {
             return dev;
@@ -458,7 +396,8 @@ VITA4611Device* VITA4611_ChassisManager::findDeviceByAddress(uint8_t addr) {
     return nullptr;
 }
 
-VITA4611Device* VITA4611_ChassisManager::findDeviceByPhysAddress(uint8_t phys_addr) {
+VITA4611Device* VITA4611_ChassisManager::findDeviceByPhysAddress(uint8_t phys_addr) 
+{
     for (const auto& [key, dev] : this->deviceMap) {
         if (dev && dev->site_number == phys_addr) {
             return dev;
@@ -467,7 +406,8 @@ VITA4611Device* VITA4611_ChassisManager::findDeviceByPhysAddress(uint8_t phys_ad
     return nullptr;
 }
 
-VITA4611Device* VITA4611_ChassisManager::findDeviceByHwAddress(uint8_t hw_addr) {
+VITA4611Device* VITA4611_ChassisManager::findDeviceByHwAddress(uint8_t hw_addr) 
+{
     for (const auto& [key, dev] : this->deviceMap) {
         if (dev && dev->hw_address == hw_addr) {
             return dev;
@@ -476,13 +416,29 @@ VITA4611Device* VITA4611_ChassisManager::findDeviceByHwAddress(uint8_t hw_addr) 
     return nullptr;
 }
 
-VITA4611Device* VITA4611_ChassisManager::getDeviceByID(uint8_t id) {
+VITA4611Device* VITA4611_ChassisManager::getDeviceByID(uint8_t id) 
+{
     for (const auto& [key, dev] : this->deviceMap) {
         if (dev && dev->device_id == id) {
             return dev;
         }
     }
     return nullptr;
+}
+
+nlohmann::json readJson(std::string path) 
+{
+    std::ifstream f(path);
+
+    nlohmann::json read;
+
+    try {
+        f >> read;
+    } catch (const nlohmann::json::parse_error& e) {
+        std::cerr << "JSON parse error: " << e.what() << std::endl;
+    }
+    
+    return read;
 }
 
 /*
@@ -500,7 +456,7 @@ VITA4611Device* VITA4611_ChassisManager::getDeviceByID(uint8_t id) {
 * as an output parameter
 */
 std::optional<ipmb_response_return_type_t> sendIPMBRequest(
-    const uint8_t channel,
+    [[maybe_unused]] const uint8_t channel, //either 0 or 4, 4 -> ipmb b, 0 -> ipmb a
     const uint8_t addr,
     const uint8_t netfn, 
     const uint8_t lun, 
@@ -510,32 +466,90 @@ std::optional<ipmb_response_return_type_t> sendIPMBRequest(
     bool verbose
 )
 {
-    /*
-    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: Sending IPMB request with the following data: channel: " + std::to_string(static_cast<int>(channel)) +\
-        " address: " + std::to_string(static_cast<int>(addr))).c_str());
-    */
+    
     if (verbose) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID: Sending IPMB request with the following data: " << std::endl;
-        dbgFile << "\t channel: " << static_cast<int>(channel) << std::endl;
-        dbgFile << "\t address: " << static_cast<int>(addr) << std::endl;
-        dbgFile << "\t netfn: " << static_cast<int>(netfn) << std::endl;
-        dbgFile << "\t lun: " << static_cast<int>(lun) << std::endl;
-        dbgFile << "\t cmd: " << static_cast<int>(cmd) << std::endl;
-        dbgFile << "\t data: ";
-        for (const auto& byte : data)
-        {
-            dbgFile << "0x" << std::hex << std::uppercase << static_cast<int>(byte) << " ";
+        std::ostringstream oss;
+        oss << "LCR:IPMID: Sending IPMB request with the following data:\n"
+            << "\tchannel: " << static_cast<int>(channel) << "\n"
+            << "\taddress: " << static_cast<int>(addr) << "\n"
+            << "\tnetfn: "   << static_cast<int>(netfn) << "\n"
+            << "\tlun: "     << static_cast<int>(lun) << "\n"
+            << "\tcmd: "     << static_cast<int>(cmd) << "\n"
+            << "\tdata: ";
+
+        for (const auto& byte : data) {
+            oss << "0x" << std::hex << std::uppercase << static_cast<int>(byte) << " ";
         }
-        dbgFile << std::dec << std::nouppercase << std::endl; // Reset stream formatting
+        oss << std::dec << std::nouppercase;
 
         if (channel == 4) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID: using ipmb b " << std::endl;
+            oss << "\nLCR:IPMID: using ipmb b";
+        } else if (channel == 0) {
+            oss << "\nLCR:IPMID: using ipmb a";
         }
-        else if (channel == 0) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID: using ipmb a" << std::endl;
+
+        // Log the full detailed message
+        phosphor::logging::log<phosphor::logging::level::INFO>(
+            oss.str().c_str()
+        );
+    }
+
+    static int ipmb_flip = 0;
+    bool ipmb_a;
+    bool ipmb_b;
+    
+    try {
+        std::ifstream file("/usr/share/ipmb_a_enable");
+        if (file.is_open()) {
+            int flag_value = 0;
+            if (file >> flag_value) {
+                if (flag_value == 1) {
+                    ipmb_a = true;  
+                } else {
+                    ipmb_a = false;
+                }
+            }
+            file.close();
+        }
+    } catch (const std::exception& e) {
+        phosphor::logging::log<phosphor::logging::level::ERR>(
+            "Failed to read ipmb_a_enable file",
+            phosphor::logging::entry("ERROR=%s", e.what()));
+    }
+
+    try {
+        std::ifstream file("/usr/share/ipmb_b_enable");
+        if (file.is_open()) {
+            int flag_value = 0;
+            if (file >> flag_value) {
+                if (flag_value == 1) {
+                    ipmb_b = true;  
+                } else {
+                    ipmb_b = false;
+                }
+            }
+            file.close();
+        }
+    } catch (const std::exception& e) {
+        phosphor::logging::log<phosphor::logging::level::ERR>(
+            "Failed to read ipmb_b_enable file",
+            phosphor::logging::entry("ERROR=%s", e.what()));
+    }
+
+    uint8_t channel_sender = 0x00;
+
+    if (discovery_finished_flag) {
+        if (ipmb_a && ipmb_b) {
+            ipmb_flip ^= 1;
+            channel_sender = static_cast<uint8_t>(ipmb_flip * 4);
+        } else if (!ipmb_a && ipmb_b) {
+            channel_sender = 0x04;
+        } else if (!ipmb_a && !ipmb_b){
+            return std::nullopt;
+        } else {
+            channel_sender = 0x00;
         }
     }
-    
 
     try
     {
@@ -550,30 +564,57 @@ std::optional<ipmb_response_return_type_t> sendIPMBRequest(
             "sendRequest");                                // Method
 
         // Append parameters
-        method.append(channel, addr, netfn, lun, cmd, data);
+        method.append(channel_sender, addr, netfn, lun, cmd, data);
 
         // phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: receiving reply");
         // Call the method synchronously
-        auto reply = bus.call(method);
+        constexpr uint64_t T3_TIMEOUT_US = 250'000;
+        auto reply = bus.call(method, T3_TIMEOUT_US);
 
+        bool retrysuccess = false;
 
+        int ipmb_flip_retry = ipmb_flip ^ 1;
+        //Rule 5.1.1-9, retry with timeout every time until
         if (reply.is_method_error())
         {
-            dbgFile << "LCR:IPMID:Test() DBus method call failed (sendRequest)." << std::endl;
-            return std::nullopt;
+            for (int retries = 0; retries < 5; retries++) {
+                /*
+                Rule 5.1.1-6 When IPMB-B is implemented, a VITA 46.11 compliant ChMC that is unable to successfully 
+                transmit an IPMI message across one of its System IPMB interfaces shall attempt to resend the 
+                unsuccessfully transmitted IPMI message over its alternate IPMB interface.
+                */
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: retry ipmb message with alternate ipmb per Rule 5.1.1-6");
+                auto method_retry = bus.new_method_call(
+                        "xyz.openbmc_project.Ipmi.Channel.Ipmb",       // Service
+                        "/xyz/openbmc_project/Ipmi/Channel/Ipmb",      // Object path
+                        "org.openbmc.Ipmb",                            // Interface
+                        "sendRequest");                                // Method
+
+                // Append parameters
+                
+                channel_sender = static_cast<uint8_t>(ipmb_flip_retry * 4);
+                method_retry.append(channel_sender, addr, netfn, lun, cmd, data);
+
+                ipmb_flip_retry ^= 1;
+                reply = bus.call(method_retry, T3_TIMEOUT_US);
+
+                if (!reply.is_method_error()) {
+                    retrysuccess = true;
+                    break;
+                }
+            }
+            if (!retrysuccess) { return std::nullopt; }
         }
 
         std::tuple<int, uint8_t, uint8_t, uint8_t, uint8_t, std::vector<uint8_t>> result;
         uint8_t cc;
 
-        // phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: reading result");
         reply.read(result);
         cc = std::get<4>(result);
 
         if (!cc) {
             // success
             *ipmi_response_cc = cc;
-            // phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: ipmbrequest good exit");
             return result;
         }
         else {
@@ -584,7 +625,6 @@ std::optional<ipmb_response_return_type_t> sendIPMBRequest(
     }
     catch (const std::exception& e)
     {
-        dbgFile << "LCR::IPMID:GetDeviceID::Exception: " << e.what() << std::endl;
         *ipmi_response_cc = 0xFF; /* TODO revisit this later */
         return std::nullopt;
     }
@@ -724,9 +764,9 @@ VITA4611Device::enumerateFRUSensors(uint8_t fru, uint8_t addr)
         auto resp_payload_sdr_repo_info = std::get<5>(resp_sdr_repo_info);
         uint8_t num_records = resp_payload_sdr_repo_info[1];
         device_record_total = num_records;
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID total number of records: " << static_cast<int>(device_record_total) << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: total number of records: " + std::to_string(static_cast<int>(device_record_total))).c_str());
     } else {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID No response from sdr repo info for device at " << static_cast<int>(addr) << ", attempting to check normal sdr info" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: No response from sdr repo info for device at " + std::to_string(static_cast<int>(addr))).c_str());
         if (ipmb_response_sdr_info.has_value()) {
             ipmb_response_return_type_t resp_sdr_info;
             resp_sdr_info = ipmb_response_sdr_info.value();
@@ -734,9 +774,9 @@ VITA4611Device::enumerateFRUSensors(uint8_t fru, uint8_t addr)
             uint8_t num_records = resp_payload_sdr_info[0];
             device_record_total = num_records;
             dynamic_sensors = resp_payload_sdr_info[1] >> 7;
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID total number of records: " << static_cast<int>(device_record_total) << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: total number of records: " + std::to_string(static_cast<int>(device_record_total))).c_str());
         } else {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID No response from sdr info (NOT REPO) for device at " << static_cast<int>(addr) << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: No response from sdr info (NOT REPO) for device at " + std::to_string(static_cast<int>(addr))).c_str());
         }
     }
 
@@ -750,14 +790,15 @@ VITA4611Device::enumerateFRUSensors(uint8_t fru, uint8_t addr)
         auto resp_payload_sdr_info = std::get<5>(resp_sdr_info);
         dynamic_sensors = resp_payload_sdr_info[1] >> 7;
     } else {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID No response from sdr info (NOT REPO) for device at " << static_cast<int>(addr) << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: No response from sdr info (NOT REPO) for device at " + std::to_string(static_cast<int>(addr))).c_str());
     }
 
     getAllSDRs();
 
 }
 
-void VITA4611Device::getSensorReading(SensorRecord& sensor, uint8_t channel) {
+void VITA4611Device::getSensorReading(SensorRecord& sensor, uint8_t channel) 
+{
     double prevreading;
     std::optional<ipmb_response_return_type_t> ipmb_response;
     uint8_t sensorNumber = sensor.sensorNumber;
@@ -780,8 +821,8 @@ void VITA4611Device::getSensorReading(SensorRecord& sensor, uint8_t channel) {
         std::vector<uint8_t> data = std::get<5>(resp);
         sensor.raw_reading = data[0];
     } else {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID. Error: No valid response from sendIPMBRequest for sensor number " << static_cast<int>(sensorNumber) 
-            << " leaving sensor raw reading alone" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: Error: No valid response from sendIPMBRequest for sensor number " + std::to_string(static_cast<int>(sensorNumber)) 
+            + " leaving sensor raw reading alone").c_str());
         // sensor.raw_reading = 0;
     }
 
@@ -805,9 +846,7 @@ void VITA4611Device::getSensorReading(SensorRecord& sensor, uint8_t channel) {
 
     //update the value on the Dbus interface
     if (sensor.sensorIface != nullptr) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID. getSensorReading a new dbus value " << sensor.reading_converted << " from the raw reading " << sensor.raw_reading << std::endl;
         if (prevreading != sensor.reading_converted && sensor.reading_converted != 0) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID. getSensorReading a new dbus value " << sensor.reading_converted << " from the raw reading " << sensor.raw_reading << std::endl;
             sensor.sensorIface->value(sensor.reading_converted);
         }
     } else {
@@ -817,15 +856,15 @@ void VITA4611Device::getSensorReading(SensorRecord& sensor, uint8_t channel) {
 }
 
 void VITA4611Device::getAllSensorReadings() {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID. getAllSensorReadings enter" << std::endl;
+    // phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID. getAllSensorReadings enter");
     for (SensorRecord& sensor : fruinfo.sensors) {
         getSensorReading(sensor, 0);
     }
     
-//    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID. Finished getAllSensorReadings" << std::endl;
 }
 
-std::tuple<uint8_t, uint8_t> VITA4611Device::reserveSDRRepo() {
+std::tuple<uint8_t, uint8_t> VITA4611Device::reserveSDRRepo() 
+{
     std::optional<ipmb_response_return_type_t> ipmb_response_sdr_reserve;
     std::vector<uint8_t> payload;
     uint8_t ipmi_response_cc;
@@ -843,14 +882,12 @@ std::tuple<uint8_t, uint8_t> VITA4611Device::reserveSDRRepo() {
     std::vector<uint8_t> data = std::get<5>(resp);
 
     std::tuple<uint8_t, uint8_t> res_id = std::make_tuple(data[0], data[1]);
-    
-    dbgFile << "\n";
-    dbgFile.flush();
 
     return res_id;
 }
 
-std::vector<uint8_t> VITA4611Device::getSDRHeader(std::tuple<uint8_t, uint8_t> res_id, uint8_t sensor_number) {
+std::vector<uint8_t> VITA4611Device::getSDRHeader(std::tuple<uint8_t, uint8_t> res_id, uint8_t sensor_number) 
+{
     // dbgFile << "getSDRHeader enter for number " << static_cast<int>(sensor_number) << std::endl;
     std::optional<ipmb_response_return_type_t> ipmb_response_sdr_header;
     std::vector<uint8_t> payload = {std::get<0>(res_id), std::get<1>(res_id), sensor_number, 0, 0, 0x05};
@@ -872,12 +909,12 @@ std::vector<uint8_t> VITA4611Device::getSDRHeader(std::tuple<uint8_t, uint8_t> r
         if (ipmb_response_sdr_header.has_value()) {
             break;
         }
-        dbgFile << "getSDRHeader failure on retry: " << (retry + 1) << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getSDRHeader failure on retry: " + std::to_string(retry + 1)).c_str());
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
     if (!ipmb_response_sdr_header.has_value()) {
-        dbgFile << "getSDRHeader failure to retrieve header for " << static_cast<int>(sensor_number) << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getSDRHeader failure to retrieve header for: " + std::to_string(static_cast<int>(sensor_number))).c_str());
         throw std::runtime_error("Failed to get SDR header after 3 retries");
     }
 
@@ -887,7 +924,8 @@ std::vector<uint8_t> VITA4611Device::getSDRHeader(std::tuple<uint8_t, uint8_t> r
     return data;
 }
 
-std::vector<uint8_t> VITA4611Device::getSDRVals(std::tuple<uint8_t, uint8_t> res_id, uint8_t sensor_number, int length) {
+std::vector<uint8_t> VITA4611Device::getSDRVals(std::tuple<uint8_t, uint8_t> res_id, uint8_t sensor_number, int length) 
+{
     // dbgFile << "getSDRVals enter for sensor number " << static_cast<int>(sensor_number) << std::endl;
     std::vector<uint8_t> response_cumulative;
 
@@ -932,12 +970,11 @@ std::vector<uint8_t> VITA4611Device::getSDRVals(std::tuple<uint8_t, uint8_t> res
         
     } while (section == 0x16);
     
-    // dbgFile << "getSDRVals sensor number " << static_cast<int>(sensor_number) << " after parsing all data and retrieving entire SDR" << std::endl;
-    // dbgFile << "getSDRvals exit" << std::endl;
     return response_cumulative;
 }
 
-bool VITA4611Device::isSensorDiscovered(uint8_t sensorNum) {
+bool VITA4611Device::isSensorDiscovered(uint8_t sensorNum) 
+{
     for (SensorRecord& s : fruinfo.sensors) {
         if (s.sensorNumber==sensorNum){
             return true;
@@ -946,7 +983,8 @@ bool VITA4611Device::isSensorDiscovered(uint8_t sensorNum) {
     return false;
 }
 
-SensorRecord* VITA4611Device::getSensorRecord(uint8_t sensorNum) {
+SensorRecord* VITA4611Device::getSensorRecord(uint8_t sensorNum) 
+{
     for (SensorRecord& s : fruinfo.sensors) {
         if (s.sensorNumber == sensorNum) {
             return &s;
@@ -956,7 +994,8 @@ SensorRecord* VITA4611Device::getSensorRecord(uint8_t sensorNum) {
 }
 
 double VITA4611Device::convert_sensor_reading(uint8_t units_def, uint8_t linearization, uint8_t M, uint8_t Mtol, uint8_t B, uint8_t Bacc, uint8_t Acc, 
-    uint8_t R_exp, uint8_t B_exp, uint8_t analog_characteristics, uint8_t reading) {
+    uint8_t R_exp, uint8_t B_exp, uint8_t analog_characteristics, uint8_t reading) 
+    {
 
     if ((analog_characteristics & 0x1) == 0) {;}
     if ((Acc & 0x1) == 0) {;}
@@ -975,7 +1014,7 @@ double VITA4611Device::convert_sensor_reading(uint8_t units_def, uint8_t lineari
     } else if (analog_data_format == 0x02) {  // 2's complement signed
         x = static_cast<double>(static_cast<int8_t>(reading));
     } else {  // 0x03: Non-analog; no conversion
-        dbgFile << "Non-analog format; returning raw" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Non-analog format; returning raw");
         return static_cast<double>(reading);  // Or throw error
     }
 
@@ -992,7 +1031,6 @@ double VITA4611Device::convert_sensor_reading(uint8_t units_def, uint8_t lineari
     
     double linearization_calc;
     if (linearization >= 0x70) {
-        // dbgFile << "Non-linear sensor; static conversion inaccurate. Using linear fallback." << std::endl;
         linearization_calc = result;
     } else {
         switch (linearization) {
@@ -1012,11 +1050,12 @@ double VITA4611Device::convert_sensor_reading(uint8_t units_def, uint8_t lineari
         }
     }
 
-    // dbgFile << "result of reading conversion: " << linearization_calc << std::endl;
     return linearization_calc;
 }
 
-void VITA4611Device::handleFullSdr(std::vector<uint8_t> sdrheader, std::vector<uint8_t> sdrvals) {
+void VITA4611Device::handleFullSdr(std::vector<uint8_t> sdrheader, std::vector<uint8_t> sdrvals) 
+{
+
     uint8_t sensorNumber_raw = sdrvals[2];
     uint8_t sensorUnits_1 = sdrvals[15];
     uint8_t sensorUnits = sdrvals[16];
@@ -1039,14 +1078,10 @@ void VITA4611Device::handleFullSdr(std::vector<uint8_t> sdrheader, std::vector<u
         calc_reading = 0.0;
     }
 
-    // dbgFile << "[" << currentTimestamp() << "] SDR Units: " << sensorUnitTypeCodes[(int)sensorUnits] << std::endl; 
     uint8_t idLength = sdrvals[42] & 0x1F;
-    // dbgFile << "ID length is " << static_cast<int>(idLength) << std::endl;
     std::vector<uint8_t> sdrvals_name(sdrvals.begin() + 43, sdrvals.begin() + 43 + static_cast<size_t>(idLength));
     std::string SDR_Name_resp(sdrvals_name.begin(), sdrvals_name.end());
-    // dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID SDR sensor name " << SDR_Name_resp << std::endl;
     SensorRecord rec;
-    // dbgFile << "Attempting to add a new sensor at number " << (int)sensorNumber_raw << std::endl;
     rec.sensorNumber = sensorNumber_raw;
     rec.sdr_header_raw = sdrheader;
     rec.sdr_info_raw = sdrvals;
@@ -1082,54 +1117,58 @@ void VITA4611Device::handleFullSdr(std::vector<uint8_t> sdrheader, std::vector<u
     rec.converted_upper_noncritical_threshold = convert_sensor_reading(sensorUnits_1,linearization,M,Mtol,B,Bacc,Acc,R_exp,B_exp,analog_characteristics,rec.upper_noncritical_threshold);
     rec.converted_lower_noncritical_threshold = convert_sensor_reading(sensorUnits_1,linearization,M,Mtol,B,Bacc,Acc,R_exp,B_exp,analog_characteristics,rec.lower_noncritical_threshold);
     rec.raw_reading = raw_reading;
-    rec.reading_converted = (calc_reading < 100000000) ? calc_reading : 0.0;
+    rec.reading_converted = (std::abs(calc_reading) < 100000000) ? calc_reading : 0.0;
+    if (sensorNumber_raw < 0x08) {
+        rec.converted_upper_nonrec_threshold      = 0.0;
+        rec.converted_lower_nonrec_threshold      = 0.0;
+        rec.converted_upper_critical_threshold    = 0.0;
+        rec.converted_lower_critical_threshold    = 0.0;
+        rec.converted_upper_noncritical_threshold = 0.0;
+        rec.converted_lower_noncritical_threshold = 0.0;
+    }
+    rec.converted_upper_nonrec_threshold      = (std::abs(rec.converted_upper_nonrec_threshold)       < 100000000.0) ? rec.converted_upper_nonrec_threshold      : 0.0;
+    rec.converted_lower_nonrec_threshold      = (std::abs(rec.converted_lower_nonrec_threshold)       < 100000000.0) ? rec.converted_lower_nonrec_threshold      : 0.0;
+    rec.converted_upper_critical_threshold    = (std::abs(rec.converted_upper_critical_threshold)     < 100000000.0) ? rec.converted_upper_critical_threshold    : 0.0;
+    rec.converted_lower_critical_threshold    = (std::abs(rec.converted_lower_critical_threshold)     < 100000000.0) ? rec.converted_lower_critical_threshold    : 0.0;
+    rec.converted_upper_noncritical_threshold = (std::abs(rec.converted_upper_noncritical_threshold)  < 100000000.0) ? rec.converted_upper_noncritical_threshold : 0.0;
+    rec.converted_lower_noncritical_threshold = (std::abs(rec.converted_lower_noncritical_threshold)  < 100000000.0) ? rec.converted_lower_noncritical_threshold : 0.0;
+    // phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: rec.converted_upper_critical_threshold: " + std::to_string(rec.converted_upper_critical_threshold)).c_str());
     
-    rec.converted_upper_nonrec_threshold      = (rec.converted_upper_nonrec_threshold       < 100000000) ? rec.converted_upper_nonrec_threshold      : 0.0;
-    rec.converted_lower_nonrec_threshold      = (rec.converted_lower_nonrec_threshold       < 100000000) ? rec.converted_lower_nonrec_threshold      : 0.0;
-    rec.converted_upper_critical_threshold    = (rec.converted_upper_critical_threshold     < 100000000) ? rec.converted_upper_critical_threshold    : 0.0;
-    rec.converted_lower_critical_threshold    = (rec.converted_lower_critical_threshold     < 100000000) ? rec.converted_lower_critical_threshold    : 0.0;
-    rec.converted_upper_noncritical_threshold = (rec.converted_upper_noncritical_threshold  < 100000000) ? rec.converted_upper_noncritical_threshold : 0.0;
-    rec.converted_lower_noncritical_threshold = (rec.converted_lower_noncritical_threshold  < 100000000) ? rec.converted_lower_noncritical_threshold : 0.0;
-
-    // dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID SDR sensor name " << SDR_Name_resp << ", raw reading: " << static_cast<int>(rec.raw_reading) << " and threshold upper critical " << static_cast<int>(rec.upper_critical_threshold) << std::endl;
-    /*dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID converted upper nonrec threshold: " << rec.converted_upper_nonrec_threshold 
-        << " and converted reading: " << rec.reading_converted << " calc_reading: " << calc_reading << std::endl;*/
-    // dbgFile << "\t reading " << static_cast<int>(rec.raw_reading) << std::endl;
+    if (std::abs(rec.converted_upper_critical_threshold) > 500) {
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: rec.converted_upper_critical_threshold is greater than 500: " + std::to_string(rec.converted_upper_critical_threshold)).c_str());
+    }
     if (!isSensorDiscovered(sensorNumber_raw)) {fruinfo.sensors.push_back(std::move(rec));}
     else {
         SensorRecord* existingrec = getSensorRecord(sensorNumber_raw);
         if (existingrec) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID SDR sensor name " << SDR_Name_resp << " is an existing record" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: handleFullSdr SDR sensor name " + SDR_Name_resp + " is an existing record").c_str());
             rec.sensorIface = std::move(existingrec->sensorIface);
             *existingrec = std::move(rec);
         }
     }
 }
 
-void VITA4611Device::handleCompactSdr(std::vector<uint8_t> sdrheader, std::vector<uint8_t> sdrvals) {
+void VITA4611Device::handleCompactSdr(std::vector<uint8_t> sdrheader, std::vector<uint8_t> sdrvals) 
+{
     //TODO: COMPLETION REQUIRED
     SensorRecord rec;
     uint8_t sensorNumber_raw = sdrvals[2];
     uint8_t sensorUnits = sdrvals[16];
-    // dbgFile << "[" << currentTimestamp() << "] SDR Units: " << sensorUnitTypeCodes[(int)sensorUnits] << std::endl; 
     uint8_t idLength = sdrvals[26] & 0x1F;
-    // dbgFile << "ID length is " << static_cast<int>(idLength) << std::endl;
-    // std::vector<uint8_t> sdrvals_name(sdrvals.begin()+27, sdrvals.end());
     std::vector<uint8_t> sdrvals_name(sdrvals.begin() + 27, sdrvals.begin() + 27 + static_cast<size_t>(idLength));
     std::string SDR_Name_resp(sdrvals_name.begin(), sdrvals_name.end());
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID SDR sensor name " << SDR_Name_resp << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: handleCompactSdr SDR sensor name " + SDR_Name_resp).c_str());
     if (isSensorDiscovered(sensorNumber_raw)) {
         SensorRecord* existingRec = getSensorRecord(sensorNumber_raw);
         if (existingRec) {
-            dbgFile << "Existing record at " << (int)sensorNumber_raw << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: handleCompactSdr Existing record at " + std::to_string((int)sensorNumber_raw)).c_str());
             existingRec->sdr_header_raw = sdrheader;
             existingRec->sdr_info_raw = sdrvals;
             existingRec->SDR_Name = SDR_Name_resp;
             existingRec->SDR_Units = sensorUnitTypeCodes[(int)sensorUnits];
         }
     } else {
-        // dbgFile << "Attempting to add a new sensor" << std::endl;
-        dbgFile << "Attempting to add a new sensor at number " << (int)sensorNumber_raw << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: handleCompactSdr Attempting to add a new sensor at number " + std::to_string((int)sensorNumber_raw)).c_str());
         rec.sensorNumber = sensorNumber_raw;
         rec.sdr_header_raw = sdrheader;
         rec.sdr_info_raw = sdrvals;
@@ -1139,23 +1178,22 @@ void VITA4611Device::handleCompactSdr(std::vector<uint8_t> sdrheader, std::vecto
     }
 }
 
-void VITA4611Device::getAllSDRs() {
-    dbgFile << "getAllSDRs enter" << std::endl;
+void VITA4611Device::getAllSDRs() 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAllSDRs enter");
     std::tuple<uint8_t, uint8_t> res_id = reserveSDRRepo();
     int retryCount = 0;
     for (uint8_t i = 0; i < device_record_total; i++) {
-        // dbgFile << "Attempting to add another SDR at sensor number " << (int)i << std::endl;
         SensorRecord rec;
         try {
-            // dbgFile << "Trying to get header on retrycount: " << retryCount << std::endl;
             std::vector<uint8_t> sdrheader = getSDRHeader(res_id, i);
             
             if (sdrheader.size() != 7) {
-                dbgFile << "Invalid SDR header for record " << (int)i << ": size=" << sdrheader.size() << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: Invalid SDR header for record " + std::to_string((int)i) + 
+                    ": size=" + std::to_string(sdrheader.size())).c_str());
                 continue;
             }
             uint8_t recordType = sdrheader[5];
-            // dbgFile << "Trying to get SDR vals now for record " << static_cast<int>(i) << std::endl;
             std::vector<uint8_t> sdrvals = getSDRVals(res_id, i, (uint8_t)sdrheader[6]);
             
             try {
@@ -1167,14 +1205,14 @@ void VITA4611Device::getAllSDRs() {
                 }
     
             } catch (const std::runtime_error& e) {
-                dbgFile << "Caught an exception: " << e.what() << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getAllSDRs Caught an exception: " + std::string(e.what())).c_str());
                 continue;
             } catch (...) {
-                dbgFile << "Caught an unknown exception." << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAllSDRs Caught an unknown exception.");
                 continue;
             }
         } catch (...) {
-            dbgFile << "Failure, retrycount: " << retryCount << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: Failure, retrycount: " + std::to_string(retryCount)).c_str());
             if (retryCount >= 3) {
                 break;
             }
@@ -1186,11 +1224,13 @@ void VITA4611Device::getAllSDRs() {
     // dbgFile << "getAllSDRs exit" << std::endl;
 }
 
-uint8_t VITA4611Device::get_dynamic_sensors() {
+uint8_t VITA4611Device::get_dynamic_sensors() 
+{
     return dynamic_sensors;
 }
 
-void VITA4611Device::checkSDRInfo() {
+void VITA4611Device::checkSDRInfo() 
+{
     // log<level::INFO>("[ENTRY] checkSDRInfo enter");
     std::optional<ipmb_response_return_type_t> ipmb_response_sdr_info;
     uint8_t ipmi_response_cc;
@@ -1248,7 +1288,6 @@ VITA4611Device::discoverFRUs()
     }
    }
    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: discoverFRUs exit");
-   dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID. Finished discoverFRUs" << std::endl;
 }
 
 
@@ -1258,33 +1297,41 @@ VITA4611Device::queryVsoCapabilities()
 {
     std::optional<ipmb_response_return_type_t> ipmb_response;
     uint8_t ipmi_response_cc;
-    dbgFile << "LCR:IPMID::ENTRY " << __FUNCTION__ << " " << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: queryVsoCapabilities enter");
 
     std::vector<uint8_t> payload = {0x03}; // VSO Group Extension Identifier
 
-    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: queryVsoCapabilities enter, sending get vso caps to myself");
 
     ipmb_response = sendIPMBRequest(channel, ipmi_address, NETFN_VITA4611, 0, VITA4611_GETVSOCAPS_CMD, payload, &ipmi_response_cc, true);
-    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: queryVsoCapabilities after request");
     if (ipmb_response.has_value()) {
-        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: queryVsoCapabilities response is good");
         ipmb_response_return_type_t resp;
         resp = ipmb_response.value();
 
-        dbgFile << "\n";
         isVITA4611Device = true;
 
         vsocaps = new VSOCaps;
-        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: queryVsoCapabilities discerning vsocaps");
 
         *vsocaps = *((struct VSOCaps *) std::get<5>(resp).data());
 
-        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: queryVsoCapabilities vsocaps retrieved");
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: queryVsoCapabilities VSORevision " + std::to_string(static_cast<int>(vsocaps->VSORevision))).c_str());
+
+        uint8_t revyear_8 = 0x00;
+        revyear_8 |= vsocaps->VSORevision >> 4;
+        revyear_8 |= vsocaps->VSORevision << 4;
+        
+        int revyear = static_cast<int>(revyear_8);
+
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: queryVsoCapabilities VSORevision, year " + std::to_string(revyear)).c_str());
         //if IPMC is indeed capable, then send command to activate IPMB b.
         if ((vsocaps->IPMBCapabilities & 0x01) == 1) {
-            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: queryVsoCapabilities sending set IPMB state command now");
-            dbgFile << "LCR:IPMID. Device at " << hw_address << " is capable of IPMB b" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: queryVsoCapabilities sending set IPMB state command now, as ipmb b is enabled");
+            
             std::vector<uint8_t> payload = {0x03, 0xFF, 0x01}; // VSO Group Extension Identifier
+
+            if (revyear > 21) {
+                payload.push_back(0x00);
+            }
+
             ipmb_response = 
                 sendIPMBRequest(
                     0,
@@ -1298,8 +1345,7 @@ VITA4611Device::queryVsoCapabilities()
         }
     }
     else {
-        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: queryVsoCapabilities exit");
-        dbgFile << "LCR:IPMID. Device is not a vita 46.11 device" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: queryVsoCapabilities exit, device is not a vita device");
         isVITA4611Device = false;
     }
 }
@@ -1324,19 +1370,18 @@ VITA4611Device::VITA4611Device(uint8_t channel, uint8_t ipmi_address)
     * Query device id 
     */
     queryDeviceId(ipmi_address);
-    dbgFile <<"LCR:IPMID. Device at " << static_cast<int>(ipmi_address) << " being added and queried." << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: VITA4611Device Device at " + std::to_string(static_cast<int>(ipmi_address)) + " being added and queried.").c_str());
     if (validDeviceID == true) {
-        dbgFile <<"LCR:IPMID. Device implements device id cmd. Querying VSO Capabilities" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: VITA4611Device Device implements device id cmd. Querying VSO Capabilities");
         queryVsoCapabilities();
 
         if (isVITA4611Device == true) {
             /* discover and build the FRU map for this device */
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID. Device is a vita 46.11 device" << std::endl;
             phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: init Vita4611 attempting to discover FRUs");
             discoverFRUs();
         }
     }
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID. Finished initializing VITA4611Device" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Finished initializing VITA4611Device");
 }
 
 /*
@@ -1347,7 +1392,26 @@ VITA4611Device::VITA4611Device(uint8_t channel, uint8_t ipmi_address)
 
 VITA4611_ChassisManager::VITA4611_ChassisManager(): bus(sdbusplus::bus::new_default()), sensorsManager(bus, "/xyz/openbmc_project/sensors")
 {
-    dbgFile << "[" << currentTimestamp() << "] "  << "LCR:IPMI::Constructor" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: VITA4611_ChassisManager constructor");
+
+    nlohmann::json chassis_fru_config = readJson("/usr/share/chassis_FRU_dir/chassis_FRU_information.json");
+    IPMB_inst = new chassis_IPMB_description_record;
+
+    populate_fru_policy_bits();
+
+    IPMB_inst->Record_Type_ID         = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["Record_Type_ID"]);
+    IPMB_inst->End_of_List            = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["End_of_List"]);
+    IPMB_inst->Record_Length          = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["Record_Length"]);
+    IPMB_inst->Record_Checksum        = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["Record_Checksum"]);
+    IPMB_inst->Header_Checksum        = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["Header_Checksum"]);
+    IPMB_inst->Manufacturer_ID_1      = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["Manufacturer_ID_1"]);
+    IPMB_inst->Manufacturer_ID_2      = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["Manufacturer_ID_2"]);
+    IPMB_inst->Manufacturer_ID_3      = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["Manufacturer_ID_3"]);
+    IPMB_inst->Vita_Record_ID         = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["Vita_Record_ID"]);
+    IPMB_inst->Record_Format_Version  = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["Record_Format_Version"]);
+    IPMB_inst->IPMB_Support           = static_cast<uint8_t>(chassis_fru_config["Chassis_IPMB_Description_Record"]["IPMB_Support"]);
+
+    ipmb_b_enabled = true;
 
     this->deviceId = DEVICE_ID;
     this->deviceRevision = DEVICE_REVISION;
@@ -1391,15 +1455,53 @@ VITA4611_ChassisManager::VITA4611_ChassisManager(): bus(sdbusplus::bus::new_defa
     this->ip_address.push_back(0x6f);
 
     this->m_ipmb_a_enable = 1;
-    this->m_ipmb_b_enable = 1;
+    this->m_ipmb_b_enable = 0;
 
+    std::ofstream ipmb_a_status("/usr/share/ipmb_a_enable");
+    ipmb_a_status << static_cast<int>(m_ipmb_a_enable) << std::endl;
+    ipmb_a_status.close();
 
-    /*
-    * enumerate i2c devices and join them to the map
-    * If they are also vita 46.11 devices then they also
-    * get initialized
-    */
-    enumerateI2CDevices();
+    
+   
+
+    IPMB_chassis_supported = (((IPMB_inst->IPMB_Support >> 1) & 0x01) == 0x01);
+    IPMB_A_400khz = (((IPMB_inst->IPMB_Support >> 2) & 0x01) == 0x01);
+    IPMB_B_400khz = (((IPMB_inst->IPMB_Support >> 4) & 0x01) == 0x01);
+
+    if (IPMB_A_400khz) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: IPMB A is 400khz capable");
+    } else {
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: IPMB A is NOT 400khz capable");
+    }
+    
+    if (IPMB_B_400khz) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: IPMB B is 400khz capable");
+    } else {
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: IPMB B is NOT 400khz capable");
+    }
+
+    if (ipmb_b_enabled && IPMB_chassis_supported) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: all devices are ipmb b capable");
+        std::ofstream ipmb_b_satisfied("/usr/share/ipmb_b");
+        std::ofstream ipmb_b_status("/usr/share/ipmb_b_enable");
+        ipmb_b_satisfied << 1 << std::endl;
+        m_ipmb_b_enable = 1;
+        ipmb_b_status << static_cast<int>(m_ipmb_b_enable) << std::endl;
+        ipmb_b_status.close();
+        ipmb_b_satisfied.close();
+    } else {
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: NOT all devices are ipmb b capable");
+        std::ofstream ipmb_b_satisfied("/usr/share/ipmb_b");
+        std::ofstream ipmb_b_status("/usr/share/ipmb_b_enable");
+        m_ipmb_b_enable = 0;
+        ipmb_b_status << static_cast<int>(m_ipmb_b_enable) << std::endl;
+        ipmb_b_satisfied << 0 << std::endl;
+        ipmb_b_status.close();
+        ipmb_b_satisfied.close();
+    }
+
+    //discovery flag so that the ipmb can now use both a and b
+    discovery_finished_flag = true;
 
     /*
     * Once we have enumerated the devices,
@@ -1410,8 +1512,47 @@ VITA4611_ChassisManager::VITA4611_ChassisManager(): bus(sdbusplus::bus::new_defa
     */
     worker = std::thread(&VITA4611_ChassisManager::processLoop, this);
 
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Checking system reset and stalling the IPMC discovery until it is high");
+    std::ifstream srstatus_file("/usr/share/sr_status");
+    int srstatus_flag = 0;
+    srstatus_file >> srstatus_flag;
+    srstatus_file.close();
+    while (srstatus_flag != 1) {
+        std::ifstream srstatus_file("/usr/share/sr_status");
+        srstatus_file >> srstatus_flag;
+        srstatus_file.close();
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: System reset set, running discovery now");
+    /*
+    * enumerate i2c devices and join them to the map
+    * If they are also vita 46.11 devices then they also
+    * get initialized
+    */
+    enumerateI2CDevices();
+    
     //run this to expose the sensors discovered in the sub-frus
     exposeFruSensors();
+}
+
+void
+VITA4611_ChassisManager::populate_fru_policy_bits()
+{
+
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: populate_fru_policy_bits enter");
+    fs::path filePath = "var/policybits/fru_bits";
+
+    if (!fs::exists(filePath)) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: populate_fru_policy_bits populating the policy bits");
+        std::ofstream policy_bits(filePath);
+        policy_bits << "0100" << std::endl;
+        policy_bits.close();
+    } else {
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: populate_fru_policy_bits no need to populate the policy bits");
+    }
+
 }
 
 VITA4611_ChassisManager::~VITA4611_ChassisManager()
@@ -1491,7 +1632,7 @@ VITA4611_ChassisManager::enumerateI2CDevices()
             */
            // THE CHASSIS MANAGER SHOULD BE FRU DEVICE 0
            if ( addr == CHMC_I2C_ADDRESS ) {
-                dbgFile << "[" << currentTimestamp() << "] "  << "LCR:IPMI::enumerate I2c Devices. Chassis Manager IP address discovered" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: enumerate I2c Devices. Chassis Manager IP address discovered");
                 if (write(file, nullptr, 0) >= 0) {
                         /*
                         * add the device
@@ -1521,6 +1662,14 @@ VITA4611_ChassisManager::enumerateI2CDevices()
                     deviceMap[n] = new VITA4611Device(0, addr << 1);
                     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                     deviceMap[n]->device_id = 0;
+                    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: enumerateI2CDevices checking if ipmb b is capable");
+                    bool ipmb_b_check = deviceMap[n]->vsocaps->IPMBCapabilities & 0x01;
+                    if (ipmb_b_check) {
+                        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: enumerateI2CDevices device at " + std::to_string(static_cast<int>(addr)) + " supports ipmb b").c_str());
+                    } else {
+                        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: enumerateI2CDevices device at " + std::to_string(static_cast<int>(addr)) + " DOES NOT support ipmb b").c_str());
+                    }
+                    ipmb_b_enabled &= ipmb_b_check;
                     CAT_entry entry;
                     entry.hw_address = deviceMap[n]->hw_address;
 
@@ -1542,19 +1691,19 @@ VITA4611_ChassisManager::enumerateI2CDevices()
 
 std::future<std::vector<uint8_t>> VITA4611_ChassisManager::submit(VITA4611Command req)
 {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMI. Command submitted" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: submit Command submitted");
     std::lock_guard<std::mutex> lock(queueMutex);
     auto fut = req.promise.get_future();
     requestQueue.push(std::move(req));
     queueCond.notify_one();
-    dbgFile << "LCR:IPMI. Command completed" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: submit Command completed");
     return fut;
 }
 
 void VITA4611_ChassisManager::sendShutdown()
 {
     VITA4611Command shutdownReq;
-    dbgFile << "[" << currentTimestamp() << "] " << "Sending chassis manager thread command to shutdown" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: sendShutdown Sending chassis manager thread command to shutdown");
     shutdownReq.type = VITA4611CMCommandType::Shutdown;
     std::lock_guard<std::mutex> lock(queueMutex);
     requestQueue.push(std::move(shutdownReq));
@@ -1563,50 +1712,46 @@ void VITA4611_ChassisManager::sendShutdown()
 
 void VITA4611_ChassisManager::processLoop()
 {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMI. worker thread started" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: processLoop worker thread started");
     while (true)
     {
         VITA4611Command req;
         {
-            dbgFile << "LCR:IPMI. Handling queue" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: processLoop Handling queue");
             std::unique_lock<std::mutex> lock(queueMutex);
-            dbgFile << "LCR:IPMI. Lock until queue is empty now" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: processLoop Lock until queue is empty now");
             queueCond.wait(lock, [this] {
                 return !requestQueue.empty();
             });
-            dbgFile << "LCR:IPMI. Pop queue" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: processLoop Pop queue");
             req = std::move(requestQueue.front());
             requestQueue.pop();
         }
-        dbgFile << "LCR:IPMI. handling if shutdown" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: processLoop handling if shutdown");
         if (req.type == VITA4611CMCommandType::Shutdown)
         {
-            dbgFile << "LCR:IPMI. Thread received shutdown command" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: processLoop Thread received shutdown command");
             break;
         }
 
-        dbgFile << "LCR:IPMI. Thread received a command to process" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: processLoop Thread received a command to process");
         std::vector<uint8_t> result = handleRequest(req);
         req.promise.set_value(result);
     }
-    dbgFile << "LCR:IPMI. worker thread is exiting" << std::endl;
-    dbgFile.flush();
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: processLoop worker thread is exiting");
 }
 
 std::vector<uint8_t> VITA4611_ChassisManager::handleRequest(const VITA4611Command& req)
 {
-    dbgFile << "[" << currentTimestamp() << "] " << "Handling request for chassis manager" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: handleRequest command running now");
     (void)req;
-    dbgFile << "Done handling request for chassis manager" << std::endl;
-    dbgFile.flush();
     return {0x00}; // Dummy success response
 }
 
 
 void VITA4611_ChassisManager::get_device_list(std::vector<uint8_t>& ipmi_address_list)
 {
-    dbgFile << "LCR:IPMI: Running ChM getdevicelist" << std::endl;
-    dbgFile.flush();
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: get_device_list command running now");
     for (const auto& pair: i2cdeviceMap) {
         const std::vector<I2CDeviceInfo>& vec = pair.second;
 
@@ -1644,29 +1789,29 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getShMCVSOCaps()
    return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getAddTable(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Calling get Add table" << std::endl;
-    dbgFile.flush();
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getAddTable(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAddTable command running now");
 
     std::vector<uint8_t> responseData;
     std::vector<uint8_t> emptyData = {};
 
 
     if (reqdata.size() < 8) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] No arguments specified" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAddTable No arguments specified");
         return ipmi::responseReqDataLenInvalid();;
     }
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Parsing request data" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAddTable Parsing request data");
     uint8_t fru_dev_id = reqdata[4];
     uint8_t addr_key_type = reqdata[5];
     uint8_t addr_key = reqdata[6];
     uint8_t site_type = reqdata[7];
 
     if (addr_key_type > 0x03 || addr_key_type == 0x02 || chassisAddressTable.entries.empty()) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] No devices present or impossible key type specified" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAddTable No devices present or impossible key type specified");
         return ipmi::responseInvalidFieldRequest();
     } else if (addr_key_type == 0x03 && site_type == 0) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] address key is physical address" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAddTable address key is physical address");
         VITA4611Device *Dev = findDeviceByPhysAddress(addr_key);
         responseData = {
             Dev->hw_address,
@@ -1679,20 +1824,20 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getAddTable(const s
     } else {
         VITA4611Device *Dev;
         if (addr_key_type == 0x00) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] address key is hardware address" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAddTable address key is hardware address");
             Dev = findDeviceByHwAddress(addr_key);
         } else if (addr_key_type == 0x01) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] address key is ipmb address" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAddTable address key is ipmb address");
             Dev = findDeviceByAddress(addr_key);
         }
 
         //TODO: Implement requesting info over the IPMB
         if (fru_dev_id > 0) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] fru address is not 0. ask the ipmc for the info" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAddTable fru address is not 0. ask the ipmc for the info");
             std::optional<ipmb_response_return_type_t> ipmb_response;
             uint8_t ipmi_response_cc;
             std::vector<uint8_t> payload = {0x03, fru_dev_id}; // VSO Group Extension Identifier
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] sending request for fru info" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAddTable sending request for fru info");
             ipmb_response = 
                 sendIPMBRequest(
                     0,
@@ -1707,8 +1852,8 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getAddTable(const s
                 ipmb_response_return_type_t resp;
                 resp = ipmb_response.value();
                 auto fru_address_info = std::get<5>(resp);
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] ipmb response for the device id. first byte: " << static_cast<int>(fru_address_info[0]) << ", length of response: "
-                    << fru_address_info.size() << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getAddTable ipmb response for the device id. first byte: " 
+                    + std::to_string(static_cast<int>(fru_address_info[0])) + ", length of response: " + std::to_string(fru_address_info.size())).c_str());
                 responseData = {
                     fru_address_info[1],
                     fru_address_info[2],
@@ -1720,7 +1865,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getAddTable(const s
                 responseData.insert(responseData.begin(), 0x03);
                 return ipmi::responseSuccess(responseData);
             } else {
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] did not receive a response from the ipmc" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getAddTable did not receive a response from the ipmc");
                 return ipmi::responseUnspecifiedError();
             }
         }
@@ -1740,8 +1885,9 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getAddTable(const s
 
 
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getChassisManagerIpAddresses(uint8_t addr_num) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] get Chassis Manager IP Addresses command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getChassisManagerIpAddresses(uint8_t addr_num) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getChassisManagerIpAddresses command running now");
     std::vector<uint8_t> emptyData = {};
     if (addr_num > 0) {
         return ipmi::responseInvalidFieldRequest();
@@ -1762,8 +1908,9 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getChassisManagerIp
     return ipmi::responseSuccess(responseData);
 };
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getChassisIdentifier() {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] get Chassis Identifier command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getChassisIdentifier() 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getChassisIdentifier command running now");
 
     std::vector<uint8_t> responseData;
 
@@ -1775,8 +1922,9 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getChassisIdentifie
     return ipmi::responseSuccess(responseData);
 };
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setChassisIdentifier(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set Chassis Identifier command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setChassisIdentifier(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setChassisIdentifier command running now");
 
     uint8_t chIdentifier = reqdata[4];
 
@@ -1800,8 +1948,9 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setChassisIdentifie
     return ipmi::responseSuccess(responseData);
 };
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::fruControl(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] fru control command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::fruControl(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: fruControl command running now");
 
     if (reqdata.size() < 5) {
         return ipmi::responseReqDataLenInvalid();;
@@ -1819,7 +1968,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::fruControl(const st
         uint8_t lun = 0x00;
         std::vector<uint8_t> payload = {0x03}; // VSO Group Extension Identifier
         uint8_t ipmi_response_cc;
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] sending cold reset" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: fruControl sending cold reset");
         
         //VITA4611Device *p = deviceMap[0];
         if (pdev) {
@@ -1842,7 +1991,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::fruControl(const st
         uint8_t lun = 0x00;
         std::vector<uint8_t> payload = {0x03}; // VSO Group Extension Identifier
         uint8_t ipmi_response_cc;
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] sending warm reset" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: fruControl sending warm reset");
         
         //VITA4611Device *p = deviceMap[0];
         if (pdev) {
@@ -1865,7 +2014,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::fruControl(const st
         // uint8_t lun = 0x00;
         // std::vector<uint8_t> payload = {0x03}; // VSO Group Extension Identifier
         // uint8_t ipmi_response_cc;
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] !!NOT IMPLEMENTED!! sending graceful reboot" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: fruControl !!NOT IMPLEMENTED!! sending graceful reboot");
         //TODO figure out graceful reboot
         //VITA4611Device *p = deviceMap[0];
         // if (pdev) {
@@ -1886,7 +2035,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::fruControl(const st
         // uint8_t lun = 0x00;
         // std::vector<uint8_t> payload = {0x03}; // VSO Group Extension Identifier
         // uint8_t ipmi_response_cc;
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] !!NOT IMPLEMENTED!! sending diagnostic interrupt" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: fruControl !!NOT IMPLEMENTED!! sending diagnostic interrupt");
         //TODO figure out diagnostic interrupt
         //VITA4611Device *p = deviceMap[0];
         // if (pdev) {
@@ -1906,7 +2055,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::fruControl(const st
     }
 
     if (ipmb_response.has_value()) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Response received" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: fruControl Response received");
     }
 
     std::vector<uint8_t> responseData;
@@ -1914,8 +2063,9 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::fruControl(const st
     return ipmi::responseSuccess(responseData);
 };
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setIpmbState(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set IPMB state command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setIpmbState(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setIpmbState command running now");
 
     if (reqdata.size() < 6) {
         return ipmi::responseReqDataLenInvalid();;
@@ -1924,17 +2074,27 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setIpmbState(const 
     uint8_t ipmb_a_state = reqdata[4];
     uint8_t ipmb_b_state = reqdata[5];
 
+    //Rule 4.1.8-3 A VITA 46.11 compliant IPMC shall refuse any “Set IPMB State” command that would cause it to become isolated from both buses.
     if (ipmb_a_state == 0xFF) {
         ;
     } else {
+        std::ofstream ipmb_a_status("/usr/share/ipmb_a_enable", std::ios::out | std::ios::trunc);
         //only care about the first bit of this request for the enable/disable
         if (ipmb_a_state % 2 == 0) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] turning off ipmb a" << std::endl;
-            m_ipmb_a_enable = 0;
+            if (m_ipmb_b_enable == 0) {
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setIpmbState turning off ipmb a");
+                m_ipmb_a_enable = 0;
+                ipmb_a_status << static_cast<int>(m_ipmb_a_enable) << std::endl;
+            } else {
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setIpmbState command violates Rule 4.1.8-3, ipmb b is disabled");
+            }
         } else {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] turning on ipmb a" << std::endl;
+            std::ofstream ipmb_a_status("/usr/share/ipmb_a_enable");
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setIpmbState turning on ipmb a");
             m_ipmb_a_enable = 1;
+            ipmb_a_status << static_cast<int>(m_ipmb_a_enable) << std::endl;
         };
+        ipmb_a_status.close();
         //ID is the state right shifted by 1
         m_ipmb_a_Link_ID = ipmb_a_state >> 1;
     }
@@ -1942,13 +2102,21 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setIpmbState(const 
     if (ipmb_b_state == 0xFF) {
         ;
     } else {
+        std::ofstream ipmb_b_status("/usr/share/ipmb_b_enable", std::ios::out | std::ios::trunc);
         if (ipmb_b_state % 2 == 0) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] turning off ipmb b" << std::endl;
-            m_ipmb_b_enable = 0;
+            if (m_ipmb_a_enable == 0) {
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setIpmbState turning off ipmb b");
+                m_ipmb_b_enable = 0;
+                ipmb_b_status << static_cast<int>(m_ipmb_b_enable) << std::endl;
+            } else {
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setIpmbState command violates Rule 4.1.8-3, ipmb a is disabled");
+            }
         } else {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] turning on ipmb b" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setIpmbState turning on ipmb b");
             m_ipmb_b_enable = 1;
+            ipmb_b_status << static_cast<int>(m_ipmb_b_enable) << std::endl;
         };
+        ipmb_b_status.close();
         //ID is the state right shifted by 1
         m_ipmb_b_Link_ID = ipmb_b_state >> 1;
     }
@@ -1958,11 +2126,13 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setIpmbState(const 
     return ipmi::responseSuccess(responseData);
 };
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFruStatePolicyBits(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set FRU State Policy Bits command running now" << std::endl;
+//setFruStatePolicyBits table 10.1.3.9-1
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFruStatePolicyBits(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFruStatePolicyBits command running now");
 
     if (reqdata.size() < 7) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] not enough arguments" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFruStatePolicyBits not enough arguments");
         return ipmi::responseReqDataLenInvalid();;
     }
 
@@ -1970,42 +2140,80 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFruStatePolicyBi
     uint8_t fru_mask_bits = reqdata[5];
     uint8_t fru_policy_bits = reqdata[6];
 
-    if (deviceMap.empty()){
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] no devices present" << std::endl;
+    if (deviceMap.empty() || fru_dev_id != 0){
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFruStatePolicyBits no devices present");
         return ipmi::responseUnspecifiedError(); 
     }
 
-    VITA4611Device *dev = deviceMap[(int)fru_dev_id];
-
     uint8_t fru_activation_policy_l = fru_mask_bits & fru_policy_bits;
-    dev->fru_activation_policy = fru_activation_policy_l;
+    std::string fru_bits_string;
+    for (int i = 0; i < 4; i++) {
+        if ((fru_activation_policy_l & 1) == 1) {
+            fru_bits_string.insert(0, "1");
+        } else {
+            fru_bits_string.insert(0, "0");
+        }
+        fru_activation_policy_l = fru_activation_policy_l >> 1;
+    }
+
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: setFruStatePolicyBits new policy will be " + fru_bits_string).c_str());
+
+    fs::path filePath = "var/policybits/fru_bits";
+    std::ofstream policy_bits(filePath);
+    policy_bits.seekp(0);
+    policy_bits << fru_bits_string << std::endl;
+    policy_bits.flush();
+    policy_bits.close();
 
     std::vector<uint8_t> responseData;
     responseData.insert(responseData.begin(), 0x03);
     return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFruStatePolicyBits(uint8_t devId) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set FRU State Policy Bits command running now" << std::endl;
+//getFruStatePolicyBits table 10.1.3.8-1
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFruStatePolicyBits(uint8_t devId) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFruStatePolicyBits command running now");
     
-    if (deviceMap.empty()){
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] no devices present" << std::endl;
+    if (deviceMap.empty() || devId != 0){
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFruStatePolicyBits no devices present");
         return ipmi::responseUnspecifiedError();
     }
 
-    VITA4611Device *dev = deviceMap[(int)devId];
+
+    std::ifstream read_policybits("var/policybits/fru_bits");
+
+    std::string fru_activation_policy_retrieved_string;
+    read_policybits >> fru_activation_policy_retrieved_string;
+    read_policybits.close();
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getFruStatePolicyBits retrieved " + fru_activation_policy_retrieved_string).c_str());
+    
+    uint8_t fru_activation_policy_retrieved;
+
+    int i = 0;
+    for (const char& c : fru_activation_policy_retrieved_string) {
+        if (c == '1') {
+            fru_activation_policy_retrieved |= 1 << (3 - i);
+        } else if (c == '0') {
+            fru_activation_policy_retrieved |= 0 << (3 - i);
+        }
+        i++;
+    }
+
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getFruStatePolicyBits returning " + std::to_string(static_cast<int>(fru_activation_policy_retrieved))).c_str());
 
     std::vector<uint8_t> responseData;
     responseData.insert(responseData.begin(), 0x03);
-    responseData.push_back(dev->fru_activation_policy);
+    responseData.push_back(fru_activation_policy_retrieved);
     return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFruActivation(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set FRU State Policy Bits command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFruActivation(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFruActivation command running now");
     
     if (reqdata.size() < 6) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] not enough arguments" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFruActivation not enough arguments");
         return ipmi::responseReqDataLenInvalid();
     }
 
@@ -2013,7 +2221,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFruActivation(co
     uint8_t FRU_directive = reqdata[5];
 
     if (deviceMap.empty()){
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] no devices present" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFruActivation no devices present");
         return ipmi::responseUnspecifiedError();
     }
 
@@ -2034,31 +2242,32 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFruActivation(co
     return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getDeviceLocatorRecordId(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set FRU State Policy Bits command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getDeviceLocatorRecordId(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getDeviceLocatorRecordId command running now");
 
     if (reqdata.size() < 5) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] not enough arguments" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getDeviceLocatorRecordId not enough arguments");
         return ipmi::responseReqDataLenInvalid();;
     }
 
     uint8_t devId = reqdata[4];
 
     if (deviceMap.empty()){
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] no devices present" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getDeviceLocatorRecordId no devices present");
         return ipmi::responseUnspecifiedError();
     }
 
     VITA4611Device *dev = deviceMap[(int)devId];
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] device found at device ID: " << static_cast<int>(dev->device_id) << std::endl;
-
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getDeviceLocatorRecordId device found at device ID: " + std::to_string(static_cast<int>(dev->device_id))).c_str());
     std::vector<uint8_t> responseData;
     responseData.insert(responseData.begin(), 0x03);
     return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getChassisManagerIpmbAddress() {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] get Chassis Manager IPMB Address command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getChassisManagerIpmbAddress() 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getChassisManagerIpmbAddress command running now");
 
     std::vector<uint8_t> responseData;
 
@@ -2076,12 +2285,13 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getChassisManagerIp
 // THEREFORE, IT IS NECESSARY FOR IT TO PROVIDE THE FOLLOWING COMMANDS
 /////////////////////////////////////////////////
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFanSpeedProperties(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] get Fan Speed Properties command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFanSpeedProperties(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFanSpeedProperties command running now");
     
     std::vector<uint8_t> emptydata;
     if (reqdata.size() < 5) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] not enough arguments" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFanSpeedProperties not enough arguments");
         return ipmi::responseReqDataLenInvalid();
     }
     
@@ -2101,11 +2311,12 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFanSpeedProperti
     return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFanLevel(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] get Fan Level command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFanLevel(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFanLevel command running now");
     
     if (reqdata.size() < 5) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] not enough arguments" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFanLevel not enough arguments");
         return ipmi::responseReqDataLenInvalid();
     }
     
@@ -2127,7 +2338,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFanLevel(const s
     try {
         fanpwm = phosphor::interface::util::getProperty<uint64_t>(bus, path, sense_interface, property);
     } catch (...) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] get Fan Level failed the dbus call" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFanLevel failed the dbus call");
     }
     
     uint8_t fanpwmbyte = static_cast<uint8_t>(fanpwm);
@@ -2138,16 +2349,17 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFanLevel(const s
     responseData.push_back(0xff); // byte 3
     responseData.push_back(fanpwmbyte); // byte 4
     responseData.push_back(policy); // byte 5
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] get Fan Level got fan level " << static_cast<int>(fanpwmbyte) << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: getFanLevel got fan level " + std::to_string(static_cast<int>(fanpwmbyte))).c_str());
     responseData.insert(responseData.begin(), 0x03);
     return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanLevel(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set Fan Level command running now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanLevel(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanLevel command running now");
     
     if (reqdata.size() < 7) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] not enough arguments" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanLevel not enough arguments");
         return ipmi::responseReqDataLenInvalid();
     }
     
@@ -2177,7 +2389,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanLevel(const s
                 phosphorServiceName, "replace");
             phosphor::interface::util::setProperty<uint64_t>(bus, path, sense_interface, property, fanpwmint);
         } catch (...) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set Fan Level failed the dbus call" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanLevel failed the dbus call");
         }    
     } else {
         try {
@@ -2186,7 +2398,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanLevel(const s
                 systemdService, systemdPath, systemdMgrIface, "StartUnit",
                 phosphorServiceName, "replace");
         } catch (...) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] starting fan control failed" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanLevel starting fan control failed");
         }
     }
     
@@ -2200,17 +2412,18 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanLevel(const s
 //END OF FAN CONTROL COMMANDS
 /////////////////////////////////////////////////
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanPolicy(const std::vector<uint8_t>& reqdata) {
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanPolicy(const std::vector<uint8_t>& reqdata) 
+{
     std::string systemdMgrIface = "org.freedesktop.systemd1.Manager";
     std::string systemdPath = "/org/freedesktop/systemd1";
     std::string systemdService = "org.freedesktop.systemd1";
     std::string phosphorServiceName = "LCR_fan_controller.service";
 
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set Fan Policy command running now" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy command running now");
     
     std::vector<uint8_t> emptydata;
     if (reqdata.size() < 9) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] not enough arguments" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy not enough arguments");
         return ipmi::responseReqDataLenInvalid();;
     }
 
@@ -2227,13 +2440,13 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanPolicy(const 
 
     //handle site number
     if (tray_site_num != 0) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] tray site number must be 0" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy tray site number must be 0");
         return ipmi::responseInvalidFieldRequest();
     }
 
     const uint8_t MAX_TIMEOUT_SECONDS = 240; // 20 minutes
     if (fan_policy_timeout > MAX_TIMEOUT_SECONDS) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] timeout exceeds maximum of 1200 seconds (20 minutes)" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy timeout exceeds maximum of 1200 seconds (20 minutes)");
         return ipmi::responseInvalidFieldRequest();
     }
 
@@ -2252,8 +2465,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanPolicy(const 
                     systemdService, systemdPath, systemdMgrIface, "StopUnit",
                     phosphorServiceName, "replace");
             }
-            
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID Fan service stopped" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy Fan service stopped");
             //handle timeout
             // Only set timer if timeout is non-zero
             if (fan_policy_timeout > 0 && fan_policy_timeout != 0xFF) {
@@ -2275,37 +2487,23 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanPolicy(const 
                                 systemdService, systemdPath, systemdMgrIface, "StartUnit",
                                 phosphorServiceName, "replace");
                             
-                            dbgFile << "[" << currentTimestamp() << "] " 
-                                << "LCR:IPMID Fan service auto-restarted after timeout" 
-                                << std::endl;
+                            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy Fan service auto-restarted after timeout");
                         } catch (...) {
-                            dbgFile << "[" << currentTimestamp() << "] " 
-                                << "LCR:IPMID[ERROR] Failed to auto-restart fan service" 
-                                << std::endl;
+                            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy Failed to auto-restart fan service");
                         }
                     } else if (ec != boost::asio::error::operation_aborted) {
-                        dbgFile << "[" << currentTimestamp() << "] " 
-                            << "LCR:IPMID[ERROR] Timer error: " << ec.message() 
-                            << std::endl;
+                        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: setFanPolicy Timer error: " + std::string(ec.message())).c_str());
                     }
                         // If operation_aborted, timer was cancelled (new command received)
                 });
-
-                dbgFile << "[" << currentTimestamp() << "] " 
-                       << "LCR:IPMID Fan restart scheduled in " 
-                       << (static_cast<int>(fan_policy_timeout) * 5) << " seconds" 
-                       << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: setFanPolicy, Fan restart scheduled in " + std::to_string(static_cast<int>(fan_policy_timeout) * 5)).c_str());
             } else if (fan_policy_timeout != 0xFF) {
-                dbgFile << "[" << currentTimestamp() << "] " 
-                       << "LCR:IPMID Fan service stopped indefinitely (timeout=0xFF)" 
-                       << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy, Fan service stopped indefinitely (timeout=0xFF)");
             } else {
-                dbgFile << "[" << currentTimestamp() << "] " 
-                       << "LCR:IPMID fan service not stopped since the timeout is <= 0" 
-                       << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy, fan service not stopped since the timeout is <= 0");
             }
         } catch (...) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set Fan Policy, stop Fan control failed the dbus call" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy, stop Fan control failed the dbus call");
         }    
     } else {
         try {
@@ -2314,7 +2512,7 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanPolicy(const 
                 systemdService, systemdPath, systemdMgrIface, "StartUnit",
                 phosphorServiceName, "replace");
         } catch (...) {
-            dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] set Fan Policy, start Fan control failed the dbus call" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: setFanPolicy, start Fan control failed the dbus call");
         }
     }
 
@@ -2323,10 +2521,11 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::setFanPolicy(const 
     return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFanPolicy(const std::vector<uint8_t>& reqdata) {
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFanPolicy(const std::vector<uint8_t>& reqdata) 
+{
     std::vector<uint8_t> emptydata;
     if (reqdata.size() < 7) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] not enough arguments" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFanPolicy incorrect number of arguments");
         return ipmi::responseReqDataLenInvalid();;
     }
 
@@ -2357,7 +2556,8 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFanPolicy(const 
     return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::get_chm_fru_info() {
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::get_chm_fru_info() 
+{
     //TODO: Implement and add prototype to chm class
 
     std::vector<uint8_t> responseData;
@@ -2375,36 +2575,36 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::get_chm_fru_info() 
     return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFruAddressInfo(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Calling get Fru Address Info" << std::endl;
-    dbgFile.flush();
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFruAddressInfo(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Calling get Fru Address Info");
 
     std::vector<uint8_t> responseData;
 
     if (reqdata.size() < 4 || (reqdata.size() > 4 && reqdata.size() < 8) || reqdata.size() > 8) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] incorrect number of arguments" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFruAddressInfo incorrect number of arguments");
         return ipmi::responseReqDataLenInvalid();
     }
     if (reqdata.size() == 4) {
         return get_chm_fru_info();
     }
 
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Parsing request data" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFruAddressInfo Parsing request data");
     uint8_t fru_dev_id = reqdata[4];
     uint8_t addr_key_type = reqdata[5];
     uint8_t addr_key = reqdata[6];
     uint8_t site_type = reqdata[7];
 
     if (fru_dev_id != 0) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Device ID must be 0, since the chassis manager is the only FRU present in this system." << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFruAddressInfo Device ID must be 0, since the chassis manager is the only FRU present in this system.");
         return ipmi::responseInvalidFieldRequest(); //TODO invalid fru dev id
     }
 
     if (addr_key_type > 0x03 || addr_key_type < 0x03) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] FRU Address Info request with key type that is not 0x03 (Physical Address). Error." << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFruAddressInfo FRU Address Info request with key type that is not 0x03 (Physical Address). Error.");
         return ipmi::responseInvalidFieldRequest(); //TODO invalid key type requested
     } else if (addr_key_type == 0x03 && site_type == 0) {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] address key is physical address" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFruAddressInfo address key is physical address");
         VITA4611Device *Dev = findDeviceByPhysAddress(addr_key);
         responseData = {
             Dev->hw_address,
@@ -2417,15 +2617,16 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::getFruAddressInfo(c
             0xFF
         };
     } else {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] site type not acceptable" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getFruAddressInfo site type not acceptable");
     }
 
     responseData.insert(responseData.begin(), 0x03);
     return ipmi::responseSuccess(responseData);
 }
 
-ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::handleChMCommand(const std::vector<uint8_t>& reqdata) {
-    dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] ChM command detected, handling now" << std::endl;
+ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::handleChMCommand(const std::vector<uint8_t>& reqdata) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: ChM command detected, handling now");
 
     //uint8_t ipmi_address = reqdata[0];
     uint8_t netFn = reqdata[1];
@@ -2437,74 +2638,75 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::handleChMCommand(co
     if (netFn == NETFN_VITA4611) {
         switch (cmd) {
             case VITA4611_GETVSOCAPS_CMD: 
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get VSO caps detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get VSO caps detected");
                 return getShMCVSOCaps();
             case VITA4611_GET_CHASSIS_ADDRESS_TABLE_INFO_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get chassis address table info detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get chassis address table info detected");
                 return getAddTable(reqdata);
             case VITA4611_CHASSIS_MANAGER_IP_ADDRESSES_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get chassis manager ip addresses detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get chassis manager ip addresses detected");
                 if (reqdata.size() > 4) {
                     return getChassisManagerIpAddresses(reqdata[4]);
                 } else {
                     return ipmi::responseReqDataLenInvalid();
                 }
             case VITA4611_GET_CHASSIS_ID_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get chassis identifier detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get chassis identifier detected");
                 return getChassisIdentifier();
             case VITA4611_SET_CHASSIS_ID_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Set chassis identifier detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Set chassis identifier detected");
                 return setChassisIdentifier(reqdata);
             case VITA4611_FRU_CONTROL: 
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] FRU Control detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: FRU Control detected");
                 return fruControl(reqdata);
             case VITA4611_SET_IPMB_STATE_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Set IPMB State detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Set IPMB State detected");
                 return setIpmbState(reqdata);
             case VITA4611_SET_FRU_STATE_POLICY_BITS_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Set FRU State Policy Bits detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Set FRU State Policy Bits detected");
                 return setFruStatePolicyBits(reqdata);
             case VITA4611_GET_FRU_STATE_POLICY_BITS_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get FRU State Policy Bits detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get FRU State Policy Bits detected");
                 if (reqdata.size() > 4) {
                     return getFruStatePolicyBits(reqdata[4]);
                 } else {
                     return ipmi::responseReqDataLenInvalid();
                 }
             case VITA4611_SET_FRU_ACTIVATION_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Set FRU Activation detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Set FRU Activation detected");
                 return setFruActivation(reqdata);
             case VITA4611_GET_DEVICE_LOCATOR_RECORD_ID_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get Device Locator Record ID detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get Device Locator Record ID detected");
                 return getDeviceLocatorRecordId(reqdata);
 
             //OPTIONAL FAN CONTROL COMMANDS
             case VITA4611_GET_FAN_SPEED_PROPERTIES_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get Fan Speed Properties detected" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get Fan Speed Properties detected");
                 return getFanSpeedProperties(reqdata);
             case VITA4611_SET_FAN_LEVEL_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Set Fan Level detected" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Set Fan Level detected");
                 return setFanLevel(reqdata);
             case VITA4611_GET_FAN_LEVEL_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get Fan Level detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get Fan Level detected");
                 return getFanLevel(reqdata);
             //END OF OPTIONAL FAN CONTROL COMMANDS
 
 
             case VITA4611_SET_FAN_POLICY_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Set Fan Policy detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Set Fan Policy detected");
                 return setFanPolicy(reqdata);
             case VITA4611_GET_FAN_POLICY_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get Fan Policy detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get Fan Policy detected");
                 return getFanPolicy(reqdata);
             case VITA4611_GET_CHASSIS_MANAGER_IPMB_ADDRESS_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get Chassis Manager IPMB Address detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get Chassis Manager IPMB Address detected");
                 return getChassisManagerIpmbAddress();
             case VITA4611_GET_FRU_ADDRESS_INFO_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get FRU Address Info detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get FRU Address Info detected");
                 return getFruAddressInfo(reqdata);
             case VITA4611_GET_MANDATORY_SENSOR_NUMBERS_CMD:
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] Get Mandatory Sensor Numbers detected" << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: Get Mandatory Sensor Numbers detected");
+                //TODO implement mandatory sensors
                 return getDeviceLocatorRecordId(reqdata);
             default:
                 return ipmi::responseInvalidCommandOnLun();
@@ -2516,7 +2718,8 @@ ipmi::RspType<std::vector<uint8_t>> VITA4611_ChassisManager::handleChMCommand(co
 }
 
 
-int VITA4611_ChassisManager::pollDeviceSensors() {
+int VITA4611_ChassisManager::pollDeviceSensors() 
+{
     for (const auto& pair : deviceMap) {
         VITA4611Device* device = pair.second;
         // dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] polling sensor readings for device " << static_cast<int>(device->device_id) << std::endl;
@@ -2525,7 +2728,8 @@ int VITA4611_ChassisManager::pollDeviceSensors() {
     return 1;
 }
 
-int VITA4611_ChassisManager::pollSDRs() {
+int VITA4611_ChassisManager::pollSDRs() 
+{
     for (const auto& pair : deviceMap) {
         VITA4611Device* device = pair.second;
         if (device->get_dynamic_sensors() == 1){
@@ -2536,7 +2740,8 @@ int VITA4611_ChassisManager::pollSDRs() {
     return 1;
 }
 
-void VITA4611_ChassisManager::exposeFruSensors() {
+void VITA4611_ChassisManager::exposeFruSensors() 
+{
     log<level::INFO>("[ENTRY] VITA4611 Exposing Sensors for all FRUs");
     for (const auto& pair : deviceMap) {
         VITA4611Device* device = pair.second;
@@ -2558,87 +2763,89 @@ void VITA4611_ChassisManager::exposeFruSensors() {
             
             std::string sensorKey = sanitizedName + "_" + std::to_string(static_cast<int>(device->ipmi_address));
             
-            log<level::INFO>(("sensor " + std::to_string(static_cast<int>(sensor.sensorNumber)) + ", sanitized_name " + \
+            /*log<level::INFO>(("sensor " + std::to_string(static_cast<int>(sensor.sensorNumber)) + ", sanitized_name " + \
             sensorKey + ", reading " + std::to_string(sensor.reading_converted) + " " + sensor.SDR_Units + \
             ", lower thresh " + std::to_string(sensor.converted_lower_critical_threshold) + ", upper thresh " + std::to_string(sensor.converted_upper_critical_threshold)).c_str());
-            
-            try {
-                if (sensor.SDR_Units == "degrees C") {
-                    path = path + "temperature/" + sensorKey;
-                    // log<level::INFO>("LCR:IPMID[ENTRY] Temperature Units");
-                    sensor.sensorIface = std::make_unique<sdbusplus::server::object_t<ValueIface, AssociationIface, ThresholdIface, warnThresholdIface>>(bus, path.c_str());
-                    sensor.sensorIface->value(sensor.reading_converted);
-                    sensor.sensorIface->unit(ValueIface::Unit::DegreesC);
-                    sensor.sensorIface->maxValue(sensor.converted_upper_nonrec_threshold + 5);
-                    sensor.sensorIface->minValue(sensor.converted_lower_nonrec_threshold - 5);
-                    sensor.sensorIface->criticalAlarmHigh(false);
-                    sensor.sensorIface->criticalAlarmLow(false);
-                    sensor.sensorIface->criticalHigh(sensor.converted_upper_critical_threshold);
-                    sensor.sensorIface->criticalLow(sensor.converted_lower_critical_threshold);
-                    sensor.sensorIface->warningAlarmHigh(false);
-                    sensor.sensorIface->warningAlarmLow(false);
-                    sensor.sensorIface->warningHigh(sensor.converted_upper_noncritical_threshold);
-                    sensor.sensorIface->warningLow(sensor.converted_lower_noncritical_threshold);
-                    // log<level::INFO>("LCR:IPMID[ENTRY] interface created");
-                } else if (sensor.SDR_Units == "Volts") {
-                    path = path + "voltage/" + sensorKey;
-                    // log<level::INFO>("LCR:IPMID[ENTRY] Volts Units");
-                    sensor.sensorIface = std::make_unique<sdbusplus::server::object_t<ValueIface, AssociationIface, ThresholdIface, warnThresholdIface>>(bus, path.c_str());
-                    sensor.sensorIface->value(sensor.reading_converted);
-                    sensor.sensorIface->unit(ValueIface::Unit::Volts);
-                    sensor.sensorIface->maxValue(sensor.converted_upper_nonrec_threshold + 0.5);
-                    sensor.sensorIface->minValue(sensor.converted_lower_nonrec_threshold - 0.5);
-                    sensor.sensorIface->criticalAlarmHigh(false);
-                    sensor.sensorIface->criticalAlarmLow(false);
-                    sensor.sensorIface->criticalHigh(sensor.converted_upper_critical_threshold);
-                    sensor.sensorIface->criticalLow(sensor.converted_lower_critical_threshold);
-                    sensor.sensorIface->warningAlarmHigh(false);
-                    sensor.sensorIface->warningAlarmLow(false);
-                    sensor.sensorIface->warningHigh(sensor.converted_upper_noncritical_threshold);
-                    sensor.sensorIface->warningLow(sensor.converted_lower_noncritical_threshold);
-                    // log<level::INFO>("LCR:IPMID[ENTRY] interface created");
-                } else if (sensor.SDR_Units == "Amps") {
-                    path = path + "current/" + sensorKey;
-                    // log<level::INFO>("LCR:IPMID[ENTRY] Amps Units");
-                    sensor.sensorIface = std::make_unique<sdbusplus::server::object_t<ValueIface, AssociationIface, ThresholdIface, warnThresholdIface>>(bus, path.c_str());
-                    sensor.sensorIface->value(sensor.reading_converted);
-                    sensor.sensorIface->unit(ValueIface::Unit::Amperes);
-                    sensor.sensorIface->maxValue(sensor.converted_upper_nonrec_threshold + 1);
-                    sensor.sensorIface->minValue(sensor.converted_lower_nonrec_threshold - 1);
-                    sensor.sensorIface->criticalAlarmHigh(false);
-                    sensor.sensorIface->criticalAlarmLow(false);
-                    sensor.sensorIface->criticalHigh(sensor.converted_upper_critical_threshold);
-                    sensor.sensorIface->criticalLow(sensor.converted_lower_critical_threshold);
-                    sensor.sensorIface->warningAlarmHigh(false);
-                    sensor.sensorIface->warningAlarmLow(false);
-                    sensor.sensorIface->warningHigh(sensor.converted_upper_noncritical_threshold);
-                    sensor.sensorIface->warningLow(sensor.converted_lower_noncritical_threshold);
-                } else if (sensor.SDR_Units == "Watts") {
-                    path = path + "power/" + sensorKey;
-                    // log<level::INFO>("LCR:IPMID[ENTRY] Watts Units");
-                    sensor.sensorIface = std::make_unique<sdbusplus::server::object_t<ValueIface, AssociationIface, ThresholdIface, warnThresholdIface>>(bus, path.c_str());
-                    sensor.sensorIface->value(sensor.reading_converted);
-                    sensor.sensorIface->unit(ValueIface::Unit::Watts);
-                    sensor.sensorIface->maxValue(sensor.converted_upper_nonrec_threshold + 5);
-                    sensor.sensorIface->minValue(sensor.converted_lower_nonrec_threshold - 5);
-                    sensor.sensorIface->criticalAlarmHigh(false);
-                    sensor.sensorIface->criticalAlarmLow(false);
-                    sensor.sensorIface->criticalHigh(sensor.converted_upper_critical_threshold);
-                    sensor.sensorIface->criticalLow(sensor.converted_lower_critical_threshold);
-                    sensor.sensorIface->warningAlarmHigh(false);
-                    sensor.sensorIface->warningAlarmLow(false);
-                    sensor.sensorIface->warningHigh(sensor.converted_upper_noncritical_threshold);
-                    sensor.sensorIface->warningLow(sensor.converted_lower_noncritical_threshold);
-                } else {
-                    path = path + "unknown/" + sensorKey;
-                    // log<level::INFO>(("LCR:IPMID[ENTRY] Unknown Units at path " + path).c_str());
+            */
+            if (sensor.sensorNumber >= 0x07) {
+                try {
+                    if (sensor.SDR_Units == "degrees C") {
+                        path = path + "temperature/" + sensorKey;
+                        // log<level::INFO>("LCR:IPMID[ENTRY] Temperature Units");
+                        sensor.sensorIface = std::make_unique<sdbusplus::server::object_t<ValueIface, AssociationIface, ThresholdIface, warnThresholdIface>>(bus, path.c_str());
+                        sensor.sensorIface->value(sensor.reading_converted);
+                        sensor.sensorIface->unit(ValueIface::Unit::DegreesC);
+                        sensor.sensorIface->maxValue(sensor.converted_upper_nonrec_threshold + 5);
+                        sensor.sensorIface->minValue(sensor.converted_lower_nonrec_threshold - 5);
+                        sensor.sensorIface->criticalAlarmHigh(false);
+                        sensor.sensorIface->criticalAlarmLow(false);
+                        sensor.sensorIface->criticalHigh(sensor.converted_upper_critical_threshold);
+                        sensor.sensorIface->criticalLow(sensor.converted_lower_critical_threshold);
+                        sensor.sensorIface->warningAlarmHigh(false);
+                        sensor.sensorIface->warningAlarmLow(false);
+                        sensor.sensorIface->warningHigh(sensor.converted_upper_noncritical_threshold);
+                        sensor.sensorIface->warningLow(sensor.converted_lower_noncritical_threshold);
+                        // log<level::INFO>("LCR:IPMID[ENTRY] interface created");
+                    } else if (sensor.SDR_Units == "Volts") {
+                        path = path + "voltage/" + sensorKey;
+                        // log<level::INFO>("LCR:IPMID[ENTRY] Volts Units");
+                        sensor.sensorIface = std::make_unique<sdbusplus::server::object_t<ValueIface, AssociationIface, ThresholdIface, warnThresholdIface>>(bus, path.c_str());
+                        sensor.sensorIface->value(sensor.reading_converted);
+                        sensor.sensorIface->unit(ValueIface::Unit::Volts);
+                        sensor.sensorIface->maxValue(sensor.converted_upper_nonrec_threshold + 0.5);
+                        sensor.sensorIface->minValue(sensor.converted_lower_nonrec_threshold - 0.5);
+                        sensor.sensorIface->criticalAlarmHigh(false);
+                        sensor.sensorIface->criticalAlarmLow(false);
+                        sensor.sensorIface->criticalHigh(sensor.converted_upper_critical_threshold);
+                        sensor.sensorIface->criticalLow(sensor.converted_lower_critical_threshold);
+                        sensor.sensorIface->warningAlarmHigh(false);
+                        sensor.sensorIface->warningAlarmLow(false);
+                        sensor.sensorIface->warningHigh(sensor.converted_upper_noncritical_threshold);
+                        sensor.sensorIface->warningLow(sensor.converted_lower_noncritical_threshold);
+                        // log<level::INFO>("LCR:IPMID[ENTRY] interface created");
+                    } else if (sensor.SDR_Units == "Amps") {
+                        path = path + "current/" + sensorKey;
+                        // log<level::INFO>("LCR:IPMID[ENTRY] Amps Units");
+                        sensor.sensorIface = std::make_unique<sdbusplus::server::object_t<ValueIface, AssociationIface, ThresholdIface, warnThresholdIface>>(bus, path.c_str());
+                        sensor.sensorIface->value(sensor.reading_converted);
+                        sensor.sensorIface->unit(ValueIface::Unit::Amperes);
+                        sensor.sensorIface->maxValue(sensor.converted_upper_nonrec_threshold + 1);
+                        sensor.sensorIface->minValue(sensor.converted_lower_nonrec_threshold - 1);
+                        sensor.sensorIface->criticalAlarmHigh(false);
+                        sensor.sensorIface->criticalAlarmLow(false);
+                        sensor.sensorIface->criticalHigh(sensor.converted_upper_critical_threshold);
+                        sensor.sensorIface->criticalLow(sensor.converted_lower_critical_threshold);
+                        sensor.sensorIface->warningAlarmHigh(false);
+                        sensor.sensorIface->warningAlarmLow(false);
+                        sensor.sensorIface->warningHigh(sensor.converted_upper_noncritical_threshold);
+                        sensor.sensorIface->warningLow(sensor.converted_lower_noncritical_threshold);
+                    } else if (sensor.SDR_Units == "Watts") {
+                        path = path + "power/" + sensorKey;
+                        // log<level::INFO>("LCR:IPMID[ENTRY] Watts Units");
+                        sensor.sensorIface = std::make_unique<sdbusplus::server::object_t<ValueIface, AssociationIface, ThresholdIface, warnThresholdIface>>(bus, path.c_str());
+                        sensor.sensorIface->value(sensor.reading_converted);
+                        sensor.sensorIface->unit(ValueIface::Unit::Watts);
+                        sensor.sensorIface->maxValue(sensor.converted_upper_nonrec_threshold + 5);
+                        sensor.sensorIface->minValue(sensor.converted_lower_nonrec_threshold - 5);
+                        sensor.sensorIface->criticalAlarmHigh(false);
+                        sensor.sensorIface->criticalAlarmLow(false);
+                        sensor.sensorIface->criticalHigh(sensor.converted_upper_critical_threshold);
+                        sensor.sensorIface->criticalLow(sensor.converted_lower_critical_threshold);
+                        sensor.sensorIface->warningAlarmHigh(false);
+                        sensor.sensorIface->warningAlarmLow(false);
+                        sensor.sensorIface->warningHigh(sensor.converted_upper_noncritical_threshold);
+                        sensor.sensorIface->warningLow(sensor.converted_lower_noncritical_threshold);
+                    } else {
+                        path = path + "unknown/" + sensorKey;
+                        // log<level::INFO>(("LCR:IPMID[ENTRY] Unknown Units at path " + path).c_str());
+                    }
+                } catch (const sdbusplus::exception::SdBusError& e) {
+                    log<level::ERR>(("Failed to create D-Bus sensor object at path " + path + ": " + e.what()).c_str());
+                } catch (const std::exception& e) {
+                    log<level::ERR>(("Unexpected error creating sensor object '" + sanitizedName + "': " + e.what()).c_str());
+                } catch (...) {
+                    log<level::ERR>("Unknown error creating sensor object - continuing");
                 }
-            } catch (const sdbusplus::exception::SdBusError& e) {
-                log<level::ERR>(("Failed to create D-Bus sensor object at path " + path + ": " + e.what()).c_str());
-            } catch (const std::exception& e) {
-                log<level::ERR>(("Unexpected error creating sensor object '" + sanitizedName + "': " + e.what()).c_str());
-            } catch (...) {
-                log<level::ERR>("Unknown error creating sensor object - continuing");
             }
         }
         //start to update the sensor readings now that the interfaces have been established
@@ -2669,17 +2876,16 @@ VITA4611_ChassisManager::execute_passthrough_cmd(const std::vector<uint8_t>& req
     } else if (m_ipmb_a_enable == 0 && m_ipmb_b_enable == 1) {
         ch = 4;
     } else {
-        dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] no channels available";
+        phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: no channels available");
         return ipmi::responseIllegalCommand();
     }
 
     ipmi::RspType<std::vector<uint8_t>> ChMResponseData;
 
     if (reqdata.size() < 4) {
-        dbgFile << "LCR:IPMID. ERROR. Invalid number of parameters " << (int)(reqdata.size()) << std::endl; 
+        phosphor::logging::log<phosphor::logging::level::INFO>(("LCR:IPMID: Invalid number of parameters " + std::to_string((int)(reqdata.size()))).c_str());
         return ipmi::responseReqDataLenInvalid();
     }
-    dbgFile.flush();
     ipmi_address = reqdata[0];
     uint8_t netFn = reqdata[1];
     uint8_t lun = reqdata[2];
@@ -2709,7 +2915,8 @@ VITA4611_ChassisManager::execute_passthrough_cmd(const std::vector<uint8_t>& req
             if (cmd == VITA4611_GETVSOCAPS_CMD) {
                 std::vector<uint8_t> payload = {0x03}; // VSO Group Extension Identifier
                 uint8_t ipmi_response_cc;
-                dbgFile << "[" << currentTimestamp() << "] " << "LCR:IPMID[ENTRY] getting device by address" << std::endl;
+                
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: getting device by address");
                 
                 if (pdev) {
                     /* payload should start with the VSO identifier

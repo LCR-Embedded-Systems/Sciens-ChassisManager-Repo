@@ -39,7 +39,7 @@ static constexpr bool DEBUG = false;
 
 namespace dynamic_sensors::ipmi::sel
 {
-static const std::filesystem::path selLogDir = "/var/log";
+static const std::filesystem::path selLogDir = "/var/sel";
 static const std::string selLogFilename = "ipmi_sel";
 
 static int getFileTimestamp(const std::filesystem::path& file)

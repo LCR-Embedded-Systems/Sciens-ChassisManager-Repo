@@ -5,7 +5,7 @@ After=network.target LCR_temp_sensors.service LCR_fan_monitor.service phosphor-i
 
 [Service]
 ExecStart=/usr/bin/lcr_fan_controller
-Restart=always
+Restart=on-failure
 Type=simple
 
 [Install]

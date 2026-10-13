@@ -1,99 +1,247 @@
 {
+    "name": "Test Fixture 1",
+    "fancontrol": true,
+    "SOSA": false,
+    "ResetActiveLow": true,
+    "onSwitchGPIO": {
+        "name": "N/A",
+        "chip": -1,
+        "line": -1,
+        "label": "41200000.gpio",
+        "activehigh": true
+    },
+    "resetSwitchGPIO": {
+        "name": "N/A",
+        "chip": -1,
+        "line": -1,
+        "label": "41200000.gpio",
+        "activehigh": true
+    },
+    "intrusionSensorGPIO": {
+        "name": "N/A",
+        "chip": -1,
+        "line": -1,
+        "label": "41200000.gpio",
+        "activehigh": true
+    },
     "tempsensors": {
-        "hwmon2" : {
+        "4-0048" : {
             "name" : "bus4_1",
-            "number" : 8
+            "number" : 8,
+            "bus" : 4,
+            "address" : 72,
+            "thresholds": {
+                "critmin": -20.0,
+                "critmax": 80.0,
+                "warnmin": -15.0,
+                "warnmax": 75.0
+            }
         }, 
-        "hwmon3": {
+        "4-004f": {
             "name": "bus4_2",
-            "number" : 9
+            "number" : 9,
+            "bus" : 4,
+            "address" : 79,
+            "thresholds": {
+                "critmin": -20.0,
+                "critmax": 80.0,
+                "warnmin": -15.0,
+                "warnmax": 75.0
+            }
         },
-        "hwmon4": {
+        "5-0048": {
             "name" : "bus5_1",
-            "number" : 10
+            "number" : 10,
+            "bus" : 5,
+            "address" : 72,
+            "thresholds": {
+                "critmin": -20.0,
+                "critmax": 80.0,
+                "warnmin": -15.0,
+                "warnmax": 75.0
+            }
         },
-        "hwmon5": {
+        "5-004f": {
             "name" : "bus5_2",
-            "number" : 11
+            "number" : 11,
+            "bus" : 5,
+            "address" : 79,
+            "thresholds": {
+                "critmin": -20.0,
+                "critmax": 80.0,
+                "warnmin": -15.0,
+                "warnmax": 75.0
+            }
         },
-        "hwmon6": {
+        "6-0048": {
             "name" : "bus6_1",
-            "number" : 12
+            "number" : 12,
+            "bus" : 6,
+            "address" : 72,
+            "thresholds": {
+                "critmin": -20.0,
+                "critmax": 80.0,
+                "warnmin": -15.0,
+                "warnmax": 75.0
+            }
         },
-        "hwmon7": {
+        "6-004f": {
             "name" : "bus6_2",
-            "number" : 13
+            "number" : 13,
+            "bus" : 6,
+            "address" : 79,
+            "thresholds": {
+                "critmin": -20.0,
+                "critmax": 80.0,
+                "warnmin": -15.0,
+                "warnmax": 75.0
+            }
         },
-        "hwmon8": {
+        "7-0048": {
             "name" : "bus7_1",
-            "number" : 14
+            "number" : 14,
+            "bus" : 7,
+            "address" : 72,
+            "thresholds": {
+                "critmin": -20.0,
+                "critmax": 80.0,
+                "warnmin": -15.0,
+                "warnmax": 75.0
+            }
         },
-        "hwmon9": {
+        "7-004f": {
             "name" : "bus7_2",
-            "number" : 15
+            "number" : 15,
+            "bus" : 7,
+            "address" : 79,
+            "thresholds": {
+                "critmin": -20.0,
+                "critmax": 80.0,
+                "warnmin": -15.0,
+                "warnmax": 75.0
+            }
         }
     },
     "adcsensors": {
-        "iio:device0": {
-            "12V_Rail": {
+        "xadc_wiz": { 
+            "bus" : 0,
+            "address" : 0,
+            "VS1": {
                 "type": "voltage",
                 "dir": "in_voltage9_raw",
                 "target": 12.0,
-                "number" : 16
+                "number" : 16,
+                "present": true,
+                "thresholds": {
+                    "critmin": 11.4,
+                    "critmax": 12.6,
+                    "warnmin": 11.35,
+                    "warnmax": 12.55
+                }
             },
-            "3_3V_Rail": {
+            "VS2": {
                 "type": "voltage",
                 "dir":  "in_voltage10_raw",
                 "target": 3.3,
-                "number" : 17
+                "number" : 17,
+                "present": true,
+                "thresholds": {
+                    "critmin": 3.135,
+                    "critmax": 3.465,
+                    "warnmin": 3.155,
+                    "warnmax": 3.445
+                }
             },
-            "5V_Rail": {
+            "VS3": {
                 "type": "voltage",
                 "dir": "in_voltage11_raw",
                 "target": 5.0,
-                "number" : 18
+                "number" : 18,
+                "present": true,
+                "thresholds": {
+                    "critmin": 4.75,
+                    "critmax": 5.25,
+                    "warnmin": 4.8,
+                    "warnmax": 5.2
+                }
             },
             "3_3auxV_Rail": {
                 "type": "voltage",
                 "dir": "in_voltage12_raw",
                 "target": 3.3,
-                "number" : 19
+                "number" : 19,
+                "present": true,
+                "thresholds": {
+                    "critmin": 3.135,
+                    "critmax": 3.465,
+                    "warnmin": 3.155,
+                    "warnmax": 3.445
+                }
             },
             "12pauxV_Rail": {
                 "type": "voltage",
                 "dir": "in_voltage13_raw",
                 "target": 12.0,
-                "number" : 20
+                "number" : 20,
+                "present": true,
+                "thresholds": {
+                    "critmin": 11.4,
+                    "critmax": 12.6,
+                    "warnmin": 11.35,
+                    "warnmax": 12.55
+                }
             },
             "12nauxV_Rail": {
                 "type": "voltage",
                 "dir": "in_voltage14_raw",
                 "target": -12.0,
-                "number" : 21
+                "number" : 21,
+                "present": true,
+                "thresholds": {
+                    "critmin": -11.4,
+                    "critmax": -12.6,
+                    "warnmin": -11.35,
+                    "warnmax": -12.55
+                }
             } 
         }
     },
     "fancontrollers": {
         "hwmon10": {
+            "pwm_bitmax" : 255,
+            "bus" : 2,
+            "address" : 32,
             "J17": {
                 "dir" : 1,
-                "number" : 22
-            },
-            "J6":{
-                "dir" : 2,
-                "number" : 23
-            },
-            "J5": {
-                "dir" : 3,
-                "number" : 24
-            },
-            "J7": {
-                "dir" : 4,
-                "number" : 25
+                "number" : 22,
+                "thresholds": {
+                    "critmin": 0,
+                    "critmax": 5000,
+                    "warnmin": 0,
+                    "warnmax": 5000
+                }
             }
         }
     },
     "gpioexpanders": {
 
+    },
+    "nativeGPIOs": {
+        "0":  "BP_GPIO_IN0",
+        "1":  "BP_GPIO_IN1",
+        "2":  "BP_GPIO_IN2",
+        "3":  "BP_GPIO_IN3",
+        "4":  "BP_GPIO_IN4",
+        "5":  "BP_GPIO_IN5",
+        "6":  "BP_GPIO_IN6",
+        "7":  "BP_GPIO_IN7",
+        "8":  "BP_GPIO_OUT0",
+        "9":  "BP_GPIO_OUT1",
+        "10": "BP_GPIO_OUT2",
+        "11": "BP_GPIO_OUT3",
+        "12": "BP_GPIO_OUT4",
+        "13": "BP_GPIO_OUT5",
+        "14": "BP_GPIO_OUT6",
+        "15": "BP_GPIO_OUT7"
     }
 }

@@ -174,13 +174,17 @@ std::map<std::string, int> get_names_numbers(nlohmann::json sensor_json) {
     for (auto& adc_dir : sensor_json["adcsensors"].items()) {
         for (auto& adc_inst : adc_dir.value().items()) {
             // phosphor::logging::log<phosphor::logging::level::INFO>(("adc directory " + adc_inst.key()).c_str());
-            names_numbers[adc_inst.key()] = sensor_json["adcsensors"][adc_dir.key()][adc_inst.key()]["number"];
+            if (adc_inst.key() != "bus" && adc_inst.key() != "address") {
+                names_numbers[adc_inst.key()] = sensor_json["adcsensors"][adc_dir.key()][adc_inst.key()]["number"];
+            }
         }
     }
     for (auto& fan_dir : sensor_json["fancontrollers"].items()) {
         for (auto& fan_inst : fan_dir.value().items()) {
             // phosphor::logging::log<phosphor::logging::level::INFO>(("fan_monitor directory " + fan_inst.key()).c_str());
-            names_numbers[fan_inst.key()] = sensor_json["fancontrollers"][fan_dir.key()][fan_inst.key()]["number"];
+            if (fan_inst.key() != "bus" && fan_inst.key() != "address") {
+                names_numbers[fan_inst.key()] = sensor_json["fancontrollers"][fan_dir.key()][fan_inst.key()]["number"];
+            }
         }
     }
     return names_numbers;
@@ -228,7 +232,7 @@ bool getSensorNumMap(std::shared_ptr<SensorNumMap>& sensorNumMap)
     prevSensorUpdatedIndex = curSensorUpdatedIndex;
 
     sensorNumMapPtr = std::make_shared<SensorNumMap>();
-    nlohmann::json configJson = readJson("/usr/share/lcr_configs/bus_devices_standalone.json");
+    nlohmann::json configJson = readJson("/usr/share/lcr_configs/bus_devices.json");
     std::map<std::string, int> m_sensor_names = get_names_numbers(configJson);
     uint16_t sensorNum = getMaxSensorNum(m_sensor_names) + 1;
     uint16_t sensorIndex = getMaxSensorNum(m_sensor_names) + 1;

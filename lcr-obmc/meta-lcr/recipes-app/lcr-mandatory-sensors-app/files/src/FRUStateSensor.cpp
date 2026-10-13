@@ -44,6 +44,17 @@ void FRUStateSensor::expose_sensor() {
         sdbusplus::vtable::property_::emits_change,
         [this](const auto&) { return current_value; }
     );
+    value_iface->register_property_r<double>(
+        "Byte3",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const auto&) { return byte3; }
+    );
+
+    value_iface->register_property_r<double>(
+        "Byte4",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const auto&) { return byte4; }
+    );
 
     // Register other required properties for Sensor.Value with defaults
     value_iface->register_property_r<int64_t>(

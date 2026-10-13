@@ -268,6 +268,8 @@ std::string getService(sdbusplus::bus_t& bus, const std::string& intf,
         throw std::runtime_error("ERROR in reading the mapper response");
     }
 
+    
+    log<level::INFO>("INFO: getService exit ");
     return mapperResponse.begin()->first;
 }
 

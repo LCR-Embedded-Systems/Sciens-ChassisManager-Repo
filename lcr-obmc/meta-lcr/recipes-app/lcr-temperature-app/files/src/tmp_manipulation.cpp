@@ -1,6 +1,5 @@
 #include "../include/tmp_manipulation.hpp"
 
-std::ofstream temp_dbgfile("temp_lcr.dbg.log", std::ios::app);
 
 std::string getService(sdbusplus::bus_t& bus, const std::string& intf,
     const std::string& path)
@@ -50,29 +49,62 @@ nlohmann::json Temp_Sensor::readJson(std::string path) {
     return read;
 }
 
+bool Temp_Sensor::writeConfigJson() {
+
+    std::ofstream outJSON("/usr/share/lcr_configs/bus_devices.json");
+    if (!outJSON.is_open()) {
+        std::cerr << "Failed to open file for writing!\n";
+        return false;
+    }
+
+    outJSON << std::setw(4) << configJson << std::endl; 
+    outJSON.close();
+    return true;
+}
+
 std::vector<std::string> Temp_Sensor::explore_dir() 
 {
     std::vector<std::string> directories;
     std::string path = "/sys/class/hwmon/";
     for (const auto& entry : fs::directory_iterator(path)) {
-
+        
         if (isValidDirectory(entry.path().string())) {
 
-            directories.push_back(entry.path().string());
+            std::error_code ec;
+            fs::path canonical_path = fs::canonical(entry.path(), ec);
+            if (ec) {
+                continue;
+            }
+
+            directories.push_back(canonical_path.string());
         }
     }
     return directories;
 }
 
 bool isDirConfig(std::string dir, nlohmann::json config) {
-    temp_dbgfile << "[" << currentTimestamp() << "] " << "LCR:TEMP: checking if directory " << dir << ". is in the config file" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>(("isDirConfig for canonical directory " + dir).c_str());
     for (auto& element : config["tempsensors"].items()) {
-        temp_dbgfile << "[" << currentTimestamp() << "] " << "LCR:TEMP: checking element: " << element.key() << "."<< std::endl;
-        if (dir == ("/sys/class/hwmon/" + element.key())) {
+
+        if (dir.find(element.key()) != std::string::npos) {
+            phosphor::logging::log<phosphor::logging::level::INFO>(("isDirConfig found " + element.key() + " in canonical directory " + dir).c_str());
             return true;
         }
+
     }
     return false;
+}
+
+std::string getJSONName(std::string dir, nlohmann::json config) {
+    for (auto& element : config["tempsensors"].items()) {
+
+        if (dir.find(element.key()) != std::string::npos) {\
+            phosphor::logging::log<phosphor::logging::level::INFO>(("getJSONName found " + element.key()).c_str());
+            return element.key();
+        }
+
+    }
+    return std::string();
 }
 
 Temp_Sensor::Temp_Sensor(std::shared_ptr<sdbusplus::asio::connection> conn_ref,
@@ -84,13 +116,12 @@ Temp_Sensor::Temp_Sensor(std::shared_ptr<sdbusplus::asio::connection> conn_ref,
 
     phosphor::logging::log<phosphor::logging::level::INFO>("Temp_Sensor initialization");
 
-    limitJson = readJson("/usr/share/thresholds/thresholds.json");
-    configJson = readJson("/usr/share/lcr_configs/bus_devices_standalone.json");
+    configJson = readJson("/usr/share/lcr_configs/bus_devices.json");
 
     std::vector<std::string> directories = explore_dir();
     for (std::string d : directories){
         if (isDirConfig(d, configJson)) {
-            temp_dbgfile << "[" << currentTimestamp() << "] " << "LCR:TEMP: building sensor from directory " << d << std::endl;
+            std::string jsonName = getJSONName(d, configJson);
             size_t pos = d.find_last_of('/');
             std::string result;
             if (pos != std::string::npos) {
@@ -98,25 +129,22 @@ Temp_Sensor::Temp_Sensor(std::shared_ptr<sdbusplus::asio::connection> conn_ref,
             } else {
                 result = d; // no "/" found, take whole string
             }
-            temp_dbgfile << "[" << currentTimestamp() << "] " << "LCR:TEMP: retrieved " << result << " from directory string" << std::endl;
             sensorElement s;
-            s.dirName = result;
+            s.dirName = jsonName;
             s.first = true;
             s.directory_path = d + "/";
             s.conts.reading_path = s.directory_path + "temp1_input";
             s.conts.max_path = s.directory_path + "temp1_max";
             s.conts.hyst_path = s.directory_path + "temp1_max_hyst";
-            temp_dbgfile << "[" << currentTimestamp() << "] " << "LCR:TEMP: pulling " << result << " from json" << std::endl;
-            if (configJson["tempsensors"][result]["name"] == nullptr){
-                temp_dbgfile << "[" << currentTimestamp() << "] " << "LCR:TEMP: nullptr in json" << std::endl;
-                s.sensorName = result;
-            } else {
-                s.sensorName = configJson["tempsensors"][result]["name"];
-            }
-            temp_dbgfile << "\t[" << currentTimestamp() << "] " << "LCR:TEMP: dirName: " << s.dirName << std::endl;
+            s.sensorName     = configJson["tempsensors"][jsonName]["name"];
+            phosphor::logging::log<phosphor::logging::level::INFO>(("Temp_Sensor creating sensor : " + s.sensorName).c_str());
+            s.highthresh     = configJson["tempsensors"][jsonName]["thresholds"]["critmax"];
+            s.lowthresh      = configJson["tempsensors"][jsonName]["thresholds"]["critmin"];
+            s.warnhighthresh = configJson["tempsensors"][jsonName]["thresholds"]["warnmax"];
+            s.warnlowthresh  = configJson["tempsensors"][jsonName]["thresholds"]["warnmin"];
             sensorItems[s.dirName] = s;
         } else {
-            temp_dbgfile << "[" << currentTimestamp() << "] " << "LCR:TEMP: directory is not in config file" << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>(("Temp_Sensor directory : " + d + " does not exist, exposing anyway").c_str());
             size_t pos = d.find_last_of('/');
             std::string result;
             if (pos != std::string::npos) {
@@ -132,7 +160,10 @@ Temp_Sensor::Temp_Sensor(std::shared_ptr<sdbusplus::asio::connection> conn_ref,
             s.conts.max_path = s.directory_path + "temp1_max";
             s.conts.hyst_path = s.directory_path + "temp1_max_hyst";
             s.sensorName = result;
-            temp_dbgfile << "\t[" << currentTimestamp() << "] " << "LCR:TEMP: dirName: " << s.dirName << std::endl;
+            s.highthresh     = 80;
+            s.lowthresh      = -20;
+            s.warnhighthresh = 75;
+            s.warnlowthresh  = -15;
             sensorItems[s.dirName] = s;
         }
     }
@@ -147,7 +178,7 @@ Temp_Sensor::Temp_Sensor(std::shared_ptr<sdbusplus::asio::connection> conn_ref,
 
 Temp_Sensor::~Temp_Sensor() 
 {
-    temp_dbgfile << "[" << currentTimestamp() << "] " << "LCR:TEMP: closing temp manipulation" << std::endl;
+    
 }
 
 int Temp_Sensor::get_file_conts() 
@@ -164,8 +195,6 @@ int Temp_Sensor::get_file_conts()
         readingfilemax >> s.vals.temp1_max;
         readingfilehyst >> s.vals.temp1_max_hyst;
 
-        temp_dbgfile << "[" << currentTimestamp() << "] " << "LCR:TEMP: max " << s.vals.temp1_max << std::endl;
-        temp_dbgfile << "[" << currentTimestamp() << "] " << "LCR:TEMP: hyst " << s.vals.temp1_max_hyst << std::endl;
     }
     return 0;
 }
@@ -217,16 +246,68 @@ void Temp_Sensor::expose_reading(const sensorElement& tempS) {
         [](const auto&) { return int64_t(0); }
     );
 
-    crit_thres_iface->register_property_r<double>(
+    crit_thres_iface->register_property_rw<double>(
         "CriticalHigh",
-        sdbusplus::vtable::property_::const_,
-        [this](const auto&) { return double(limitJson["TempLimits"]["critmax"]); }
+        sdbusplus::vtable::property_::emits_change,
+        [this, name = tempS.dirName](const double& requested_value, double& current_value) -> bool {
+            // Setter: Validate/update stored status
+            auto it = sensorItems.find(name);
+            if (it == sensorItems.end()) {
+                return false;
+            }
+    
+            if (requested_value == current_value) {
+                // No change - don't emit signal
+                return true;
+            }
+    
+            // Update internal D-Bus value and map
+            current_value = requested_value;
+            it->second.highthresh = requested_value;
+    
+            configJson["tempsensors"][name]["thresholds"]["critmax"] = requested_value;
+            return writeConfigJson();
+        },
+        [this, name = tempS.dirName](const double&) -> double {
+            auto it = sensorItems.find(name);
+            if (it != sensorItems.end()) {
+                return ((double)it->second.highthresh);
+            }
+            return 253.0;  // Fallback
+        }
     );
-    crit_thres_iface->register_property_r<double>(
+
+    crit_thres_iface->register_property_rw<double>(
         "CriticalLow",
-        sdbusplus::vtable::property_::const_,
-        [this](const auto&) { return double(limitJson["TempLimits"]["critmin"]); }
+        sdbusplus::vtable::property_::emits_change,
+        [this, name = tempS.dirName](const double& requested_value, double& current_value) -> bool {
+            // Setter: Validate/update stored status
+            auto it = sensorItems.find(name);
+            if (it == sensorItems.end()) {
+                return false;
+            }
+    
+            if (requested_value == current_value) {
+                // No change - don't emit signal
+                return true;
+            }
+    
+            // Update internal D-Bus value and map
+            current_value = requested_value;
+            it->second.lowthresh = requested_value;
+    
+            configJson["tempsensors"][name]["thresholds"]["critmin"] = requested_value;
+            return writeConfigJson();
+        },
+        [this, name = tempS.dirName](const double&) -> double {
+            auto it = sensorItems.find(name);
+            if (it != sensorItems.end()) {
+                return ((double)it->second.lowthresh);
+            }
+            return -253.0;  // Fallback
+        }
     );
+
     crit_thres_iface->register_property_r<bool>(
         "CriticalAlarmHigh",
         sdbusplus::vtable::property_::emits_change,  // Changed to emits_change
@@ -234,7 +315,7 @@ void Temp_Sensor::expose_reading(const sensorElement& tempS) {
             auto it = sensorItems.find(name);
             if (it != sensorItems.end()) {
                 double cur_val = it->second.vals.cur_reading / 1000.0;
-                return cur_val > limitJson["TempLimits"]["critmax"];
+                return cur_val > it->second.highthresh;
             }
             return false;
         }
@@ -246,22 +327,74 @@ void Temp_Sensor::expose_reading(const sensorElement& tempS) {
             auto it = sensorItems.find(name);
             if (it != sensorItems.end()) {
                 double cur_val = it->second.vals.cur_reading / 1000.0;
-                return cur_val < limitJson["TempLimits"]["critmin"];
+                return cur_val < it->second.lowthresh;
             }
             return false;
         }
     );
 
-    warn_thres_iface->register_property_r<double>(
+    warn_thres_iface->register_property_rw<double>(
         "WarningHigh",
-        sdbusplus::vtable::property_::const_,
-        [this](const auto&) { return double(limitJson["TempLimits"]["warnmax"]); }
+        sdbusplus::vtable::property_::emits_change,
+        [this, name = tempS.dirName](const double& requested_value, double& current_value) -> bool {
+            // Setter: Validate/update stored status
+            auto it = sensorItems.find(name);
+            if (it == sensorItems.end()) {
+                return false;
+            }
+    
+            if (requested_value == current_value) {
+                // No change - don't emit signal
+                return true;
+            }
+    
+            // Update internal D-Bus value and map
+            current_value = requested_value;
+            it->second.warnhighthresh = requested_value;
+
+            configJson["tempsensors"][name]["thresholds"]["warnmax"] = requested_value;
+            return writeConfigJson();
+        },
+        [this, name = tempS.dirName](const double&) -> double {
+            auto it = sensorItems.find(name);
+            if (it != sensorItems.end()) {
+                return ((double)it->second.warnhighthresh);
+            }
+            return 253.0;  // Fallback
+        }
     );
-    warn_thres_iface->register_property_r<double>(
+
+    warn_thres_iface->register_property_rw<double>(
         "WarningLow",
-        sdbusplus::vtable::property_::const_,
-        [this](const auto&) { return double(limitJson["TempLimits"]["warnmin"]); }
+        sdbusplus::vtable::property_::emits_change,
+        [this, name = tempS.dirName](const double& requested_value, double& current_value) -> bool {
+            // Setter: Validate/update stored status
+            auto it = sensorItems.find(name);
+            if (it == sensorItems.end()) {
+                return false;
+            }
+    
+            if (requested_value == current_value) {
+                // No change - don't emit signal
+                return true;
+            }
+    
+            // Update internal D-Bus value and map
+            current_value = requested_value;
+            it->second.warnlowthresh = requested_value;
+
+            configJson["tempsensors"][name]["thresholds"]["warnmin"] = requested_value;
+            return writeConfigJson();
+        },
+        [this, name = tempS.dirName](const double&) -> double {
+            auto it = sensorItems.find(name);
+            if (it != sensorItems.end()) {
+                return ((double)it->second.warnlowthresh);
+            }
+            return -253.0;  // Fallback
+        }
     );
+
     warn_thres_iface->register_property_r<bool>(
         "WarningAlarmHigh",
         sdbusplus::vtable::property_::emits_change,  // Changed to emits_change
@@ -269,7 +402,7 @@ void Temp_Sensor::expose_reading(const sensorElement& tempS) {
             auto it = sensorItems.find(name);
             if (it != sensorItems.end()) {
                 double cur_val = it->second.vals.cur_reading / 1000.0;
-                return cur_val > limitJson["TempLimits"]["warnmax"];
+                return cur_val > it->second.warnhighthresh;
             }
             return false;
         }
@@ -281,7 +414,7 @@ void Temp_Sensor::expose_reading(const sensorElement& tempS) {
             auto it = sensorItems.find(name);
             if (it != sensorItems.end()) {
                 double cur_val = it->second.vals.cur_reading / 1000.0;
-                return cur_val < limitJson["TempLimits"]["warnmin"];
+                return cur_val < it->second.warnlowthresh;
             }
             return false;
         }
@@ -306,11 +439,12 @@ void Temp_Sensor::expose_reading(const sensorElement& tempS) {
     m_crit_thres_iface[tempS.dirName] = std::move(crit_thres_iface);
     m_warn_thres_iface[tempS.dirName] = std::move(warn_thres_iface);
     m_assoc_iface[tempS.dirName] = std::move(assoc_iface);
-    phosphor::logging::log<phosphor::logging::level::INFO>("expose_reading exit");
+    // phosphor::logging::log<phosphor::logging::level::INFO>("expose_reading exit");
 }
 
 void Temp_Sensor::update_reading() 
 {
+    // phosphor::logging::log<phosphor::logging::level::INFO>("update_reading enter");
     if (sensorItems.empty()) {
         schedule_update();  // Nothing to do; schedule next
         return;
@@ -331,6 +465,7 @@ void Temp_Sensor::update_reading()
         const std::string& temp_name = keys[*idx];
         ++(*idx);
         async_readtemp(temp_name, [this, check_next_ptr, temp_name](double old_value, double new_value) {
+            // phosphor::logging::log<phosphor::logging::level::INFO>(("async_update_bus about to run update bus for temperature with name " + temp_name).c_str());
             async_update_bus(temp_name, old_value, new_value);
             (*check_next_ptr)();  // Proceed to next temp sensor
         });
@@ -339,7 +474,9 @@ void Temp_Sensor::update_reading()
 
 }
 
-void Temp_Sensor::async_readtemp(const std::string& temp_name, std::function<void(double, double)> callback) {
+void Temp_Sensor::async_readtemp(const std::string& temp_name, std::function<void(double, double)> callback)
+{
+    // phosphor::logging::log<phosphor::logging::level::INFO>("async_readtemp enter");
     boost::asio::post(timer.get_executor(), [this, temp_name, callback]() {
         double new_value = -253.0;  // Error value
         try {
@@ -362,6 +499,10 @@ void Temp_Sensor::async_readtemp(const std::string& temp_name, std::function<voi
             readingfile >> temp_ptr->vals.cur_reading;
 
             new_value = (((double)temp_ptr->vals.cur_reading)/1000);  // Get updated status
+
+            // phosphor::logging::log<phosphor::logging::level::INFO>(("async_readtemp current reading: " + std::to_string(temp_ptr->vals.cur_reading)).c_str());
+            // phosphor::logging::log<phosphor::logging::level::INFO>(("async_readtemp calculated value: " + std::to_string(new_value)).c_str());
+
             callback(old_value, new_value);
         } catch (const std::exception& e) {
             // On error, don't update cur_reading (already not updated), log, and callback with error value
@@ -373,7 +514,9 @@ void Temp_Sensor::async_readtemp(const std::string& temp_name, std::function<voi
     });
 }
 
-void Temp_Sensor::async_update_bus(const std::string& dirName, double old_val, double new_val) {
+void Temp_Sensor::async_update_bus(const std::string& dirName, double old_val, double new_val) 
+{
+    // phosphor::logging::log<phosphor::logging::level::INFO>("async_update_bus enter");
     auto vit = m_value_iface.find(dirName);
     auto tit = m_crit_thres_iface.find(dirName);
     auto it = sensorItems.find(dirName);
@@ -388,22 +531,16 @@ void Temp_Sensor::async_update_bus(const std::string& dirName, double old_val, d
         if (viface) {
             viface->signal_property("Value");  // Always signal Value change
         }
-        nlohmann::json local_limitJson = readJson("/usr/share/thresholds/thresholds.json");
 
         // Extract thresholds with error handling (see mitigations below)
         double highthresh = 0.0;  // Default/fallback
         double lowthresh = 0.0;   // Default/fallback
         double warnhighthresh = 0.0;  // Default/fallback
         double warnlowthresh = 0.0;   // Default/fallback
-        try {
-            highthresh = local_limitJson["TempLimits"]["critmax"];
-            lowthresh = local_limitJson["TempLimits"]["critmin"];
-            warnhighthresh = local_limitJson["TempLimits"]["warnmax"];
-            warnlowthresh = local_limitJson["TempLimits"]["warnmin"];
-        } catch (const nlohmann::json::exception& e) {
-            phosphor::logging::log<phosphor::logging::level::ERR>(("Failed to parse thresholds JSON: " + std::string(e.what())).c_str());
-            return;
-        }
+        highthresh     = temp_ptr->highthresh;
+        lowthresh      = temp_ptr->lowthresh;
+        warnhighthresh = temp_ptr->warnhighthresh;
+        warnlowthresh  = temp_ptr->warnlowthresh;
         // Check and signal alarms only if state changed
         bool old_warn_alarm_high = old_val > warnhighthresh;
         bool new_warn_alarm_high = new_val > warnhighthresh;
@@ -453,6 +590,7 @@ void Temp_Sensor::async_update_bus(const std::string& dirName, double old_val, d
 
 // Schedule the next periodic update
 void Temp_Sensor::schedule_update() {
+    // phosphor::logging::log<phosphor::logging::level::INFO>("schedule_update enter");
     timer.expires_after(std::chrono::milliseconds(1000));
     timer.async_wait([this](const boost::system::error_code& ec) {
         if (ec) {

@@ -42,12 +42,21 @@ enum class ThresholdTypeCodes : uint8_t
 struct ADC_element
 {
     std::string name;
+    std::string parentName;
     std::string path;
+    std::string type;
     double V_target;
     int raw_reading;
     double scale_coeff;
     double V_current;
+    double nominal;
     bool init;
+    double cmax;
+    double highthresh;
+    double lowthresh;
+    double warnhighthresh;
+    double warnlowthresh;
+    std::vector<int> filter_vec;
     ADC_element(const std::string& n, const std::string& p, double target) : name(n), path(p), V_target(target) {}
 };
 
@@ -60,6 +69,7 @@ class ADC_sensor
         ~ADC_sensor();
         int expose_readings();
         void update_readings();
+        bool writeConfigJson();
 
         void async_readadc(const std::string& adc_name, std::function<void(double, double)> callback);
         void async_update_bus(const std::string& adc_name, double old_val, double new_val);
@@ -90,6 +100,7 @@ class ADC_sensor
         nlohmann::json configJson;
 
         bool first;
+        bool SOSA;
 
 };
 

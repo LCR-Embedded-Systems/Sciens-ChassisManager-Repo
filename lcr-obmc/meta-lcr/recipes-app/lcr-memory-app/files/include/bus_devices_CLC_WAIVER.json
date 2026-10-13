@@ -1,0 +1,201 @@
+{
+    "name": "CMAB CLC Chassis_1",
+    "fancontrol": true,
+    "SOSA": true,
+    "ResetActiveLow": false,
+    "onSwitchGPIO": {
+        "name": "POWER_SWITCH_INPUT_CHM",
+        "chip": -1,
+        "line": -1,
+        "label": "4-0019",
+        "activehigh": false
+    },
+    "resetSwitchGPIO": {
+        "name": "N/A",
+        "chip": -1,
+        "line": -1,
+        "label": "41200000.gpio",
+        "activehigh": true
+    },
+    "intrusionSensorGPIO": {
+        "name": "N/A",
+        "chip": -1,
+        "line": -1,
+        "label": "41200000.gpio",
+        "activehigh": true
+    },
+    "tempsensors": {
+        "hwmon2" : {
+            "name" : "Adapter_Board",
+            "number" : 8,
+            "bus" : 4,
+            "address" : 79
+        },
+        "hwmon3" : {
+            "name" : "slot_2_3",
+            "number" : 9,
+            "bus" : 4,
+            "address" : 72
+        },
+        "hwmon4" : {
+            "name" : "slot_6_7",
+            "number" : 10,
+            "bus" : 4,
+            "address" : 73
+        },
+        "hwmon5" : {
+            "name" : "slot_10_11",
+            "number" : 11,
+            "bus" : 4,
+            "address" : 74
+        },
+        "hwmon6" : {
+            "name" : "slot_13_14",
+            "number" : 12,
+            "bus" : 4,
+            "address" : 75
+        }
+    },
+    "adcsensors": {
+        "4-002f": {
+            "bus" : 4,
+            "address" : 47,
+            "Fan_Voltage": {
+                "type": "voltage",
+                "dir": "in_voltage0_raw",
+                "target": 28.0,
+                "nominal": 1.0,
+                "max": 2.5,
+                "number" : 13,
+                "present": true
+            },
+            "fan_1current": {
+                "type": "current",
+                "dir": "in_voltage1_raw",
+                "target": 10.0,
+                "nominal": 2.1,
+                "max": 2.5,
+                "number" : 14,
+                "present": true
+            },
+            "fan_2current": {
+                "type": "current",
+                "dir": "in_voltage2_raw",
+                "target": 10.0,
+                "nominal": 2.1,
+                "max": 2.5,
+                "number" : 15,
+                "present": true
+            },
+            "fan_3current": {
+                "type": "current",
+                "dir": "in_voltage3_raw",
+                "target": 10.0,
+                "nominal": 2.1,
+                "max": 2.5,
+                "number" : 16,
+                "present": true
+            },
+            "fan_4current": {
+                "type": "current",
+                "dir": "in_voltage4_raw",
+                "target": 10.0,
+                "nominal": 2.1,
+                "max": 2.5,
+                "number" : 17,
+                "present": true
+            }
+        },
+        "xadc_wiz": {
+            "bus" : 0,
+            "address" : 0,
+            "12V_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage9_raw",
+                "target": 12.0,
+                "number" : 18,
+                "present": true
+            },
+            "3_3auxV_Rail": {
+                "type": "voltage",
+                "dir": "in_voltage12_raw",
+                "target": 3.3,
+                "number" : 19,
+                "present": true
+            }
+        }
+    },
+    "fancontrollers": {
+        "CMAB_28V": {
+            "pwm_bitmax" : 255,
+            "bus" : 4,
+            "address" : 35,
+            "chassis_fan": {
+                "dir" : 1,
+                "number" : 20
+            },
+            "pump1": {
+                "dir" : 2,
+                "number" : 21
+            },
+            "pump2": {
+                "dir" : 3,
+                "number" : 22
+            },
+            "pump3": {
+                "dir" : 4,
+                "number" : 23
+            }
+        },
+        "ChM_Local": {
+            "bus" : 2,
+            "address" : 32
+        }
+    },
+    "gpioexpanders": {
+        "4-0019" : {
+            "bus" : 4,
+            "address" : 25,
+            "interrupt": true,
+            "interrupt_pin": "BP_GPIO_IN2",
+            "POWER_LED_RED" : 0,
+            "POWER_LED_GRN" : 1,
+            "TEMP_LED_RED" : 2,
+            "TEMP_LED_GRN" : 3,
+            "USER_LED_RED" : 4,
+            "USER_LED_GRN" : 5,
+            "FAULT_LED_RED" : 6,
+            "FAULT_LED_GRN" : 7,
+            "PS1_FAN_FAIL" : 8,
+            "PS2_FAN_FAIL" : 9,
+            "INTRUSION" : 10,
+            "POWER_SWITCH_INPUT_CHM" : 11,
+            "ZEROIZE_INPUT" : 12,
+            "unused0" : 13,
+            "unused1" : 14,
+            "unused2" : 15
+        },
+        "4-0028" : {
+            "bus" : 4,
+            "address" : 40,
+            "interrupt": false,
+            "slot1_maskable_reset" : 0,
+            "slot2_maskable_reset" : 1,
+            "slot3_maskable_reset" : 2,
+            "slot4_maskable_reset" : 3,
+            "slot5_maskable_reset" : 4,
+            "slot6_maskable_reset" : 5,
+            "slot7_maskable_reset" : 6,
+            "slot8_maskable_reset" : 7,
+            "slot9_maskable_reset" : 8,
+            "slot10_maskable_reset" : 9,
+            "slot11_maskable_reset" : 10,
+            "slot12_maskable_reset" : 11,
+            "slot13_maskable_reset" : 12,
+            "slot14_maskable_reset" : 13,
+            "slot15_maskable_reset" : 14,
+            "slot16_maskable_reset" : 15
+        }
+    }
+}
+

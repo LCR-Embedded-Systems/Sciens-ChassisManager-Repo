@@ -20,6 +20,7 @@ using ObjectManagerIface = sdbusplus::server::manager_t;
 
 struct gpio_info {
     bool input;
+    bool interrupt;
     int chip;
     int line;
     int status;
@@ -41,6 +42,12 @@ class GpioMonitor
         void readallpins();
 
         void expose_gpio(const gpio_info& target_gpio);
+        void expose_powerswitch_gpio(const gpio_info& target_gpio);
+        void expose_resetbutton_gpio(const gpio_info& target_gpio);
+        void expose_intrusion_gpio(const gpio_info& target_gpio);
+        void expose_unpopulated_powerswitch();
+        void expose_unpopulated_resetbutton();
+        void expose_unpopulated_intrusion();
         void expose_gpios();
 
         void update_bus(gpio_info* target_gpio);
@@ -52,6 +59,8 @@ class GpioMonitor
         void async_readgpio(const std::string& gpio_name, std::function<void(bool, int)> callback);
         void async_readallpins();
         void async_update_bus(const std::string& gpio_name, bool new_status);
+
+        gpiod::chip find_chip_by_label(const std::string& want);
 
     private:
 
@@ -92,9 +101,17 @@ class GpioMonitor
         gpio_info BP_GPIO_IN7;
 
         void build_gpio_list();
-        gpio_info populate_info(bool input, int chip, int line, int status, std::string name);
+        gpio_info populate_info(bool input, bool interrupt, int chip, int line, int status, std::string name);
 
         double ts;
         
         nlohmann::json configJson;
+        std::unique_ptr<sdbusplus::asio::dbus_interface> intrusion_iface;
+        std::unique_ptr<sdbusplus::asio::dbus_interface> powerswitch_iface;
+        std::unique_ptr<sdbusplus::asio::dbus_interface> resetbutton_iface;
+        bool intrusion_init = false;
+        bool powerswitch_init = false;
+        bool resetbutton_init = false;
+
+        std::vector<std::string> interrupt_pins;
 };

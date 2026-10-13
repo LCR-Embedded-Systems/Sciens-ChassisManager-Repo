@@ -74,7 +74,6 @@ SYSTEMD_SERVICE:${PN} += "xyz.openbmc_project.Ipmi.Internal.SoftPowerOff.service
 
 RRECOMMENDS:${PN} += "phosphor-settings-manager"
 
-
 require ${BPN}.inc
 
 # Setup IPMI Whitelist Conf files
@@ -154,7 +153,6 @@ addtask merge_sensors after do_configure before do_compile
 IPMI_HOST_NEEDED_SERVICES = "\
     mapper-wait@-xyz-openbmc_project-control-host{}-boot.service \
     mapper-wait@-xyz-openbmc_project-control-host{}-boot-one_time.service \
-    mapper-wait@-xyz-openbmc_project-control-host{}-power_restore_policy.service \
     mapper-wait@-xyz-openbmc_project-control-host{}-restriction_mode.service \
     "
 

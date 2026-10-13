@@ -3,6 +3,7 @@
 #include <vector>
 #include <map>
 #include <optional>
+#include <memory>
 #include <thread>
 #include <chrono>
 #include <atomic>
@@ -29,6 +30,10 @@
 #include <xyz/openbmc_project/Common/error.hpp>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <sdbusplus/asio/connection.hpp>
+#include <sdbusplus/asio/object_server.hpp>
+#include <boost/asio.hpp>
+#include <boost/asio/steady_timer.hpp>
 
 
 /*
@@ -36,6 +41,8 @@
 * Functions taken from sdbusplus.hpp from the phosphor-fan-presence app
 *
 */
+
+using SubTree = std::map<std::string, std::map<std::string, std::vector<std::string>>>;
 
 namespace phosphor
 {
@@ -330,6 +337,148 @@ static void setProperty(sdbusplus::bus_t& bus, const std::string& path,
                                 interface, property};
     }
 }
+
+template <typename T>
+inline void async_get_dbus_property(
+    std::shared_ptr<sdbusplus::asio::connection> conn,
+    const std::string& service,
+    const std::string& path,
+    const std::string& iface,
+    const std::string& property,
+    std::function<void(const boost::system::error_code&, T)> callback,
+    int maxRetries = 3,
+    std::chrono::milliseconds retryDelay = std::chrono::milliseconds(1000))
+{
+    struct State
+    {
+        std::shared_ptr<sdbusplus::asio::connection> conn;
+        std::string service;
+        std::string path;
+        std::string iface;
+        std::string property;
+        std::function<void(const boost::system::error_code&, T)> callback;
+        int retriesLeft;
+        std::chrono::milliseconds delay;
+        std::shared_ptr<boost::asio::steady_timer> timer;
+        std::function<void()> attempt;
+    };
+
+    auto state = std::make_shared<State>();
+    state->conn = std::move(conn);
+    state->service = service;
+    state->path = path;
+    state->iface = iface;
+    state->property = property;
+    state->callback = std::move(callback);
+    state->retriesLeft = maxRetries;
+    state->delay = retryDelay;
+
+    state->attempt = [state]() {
+        state->conn->async_method_call(
+            [state](const boost::system::error_code ec,
+                    sdbusplus::message::message& m) {
+                if (ec)
+                {
+                    if (state->retriesLeft > 0)
+                    {
+                        phosphor::logging::log<phosphor::logging::level::WARNING>(
+                            ("Get " + state->path + " failed: " +
+                             ec.message() + ", retrying (" +
+                             std::to_string(state->retriesLeft) + " left)")
+                                .c_str());
+
+                        --state->retriesLeft;
+                        state->timer =
+                            std::make_shared<boost::asio::steady_timer>(
+                                state->conn->get_io_context());
+                        state->timer->expires_after(state->delay);
+                        state->timer->async_wait(
+                            [state](const boost::system::error_code& tec) {
+                                if (tec)
+                                {
+                                    state->callback(tec, T{});
+                                    return;
+                                }
+                                state->attempt();
+                            });
+                        return;
+                    }
+
+                    phosphor::logging::log<phosphor::logging::level::ERR>(
+                        ("Get " + state->path +
+                         " failed: " + ec.message())
+                            .c_str());
+                    state->callback(ec, T{});
+                    return;
+                }
+
+                try
+                {
+                    std::variant<T> var;
+                    m.read(var);
+                    state->callback({}, std::get<T>(var));
+                }
+                catch (const std::exception& e)
+                {
+                    phosphor::logging::log<phosphor::logging::level::ERR>(
+                        ("Get " + state->path + " unpack: " + e.what())
+                            .c_str());
+                    state->callback(boost::system::errc::make_error_code(
+                                        boost::system::errc::invalid_argument),
+                                    T{});
+                }
+            },
+            state->service, state->path, "org.freedesktop.DBus.Properties",
+            "Get", state->iface, state->property);
+    };
+
+    state->attempt();
+}
+
+template <typename T>
+inline void async_set_dbus_property(
+    std::shared_ptr<sdbusplus::asio::connection> conn,
+    const std::string& service,
+    const std::string& path,
+    const std::string& iface,
+    const std::string& property,
+    T value,
+    std::function<void(const boost::system::error_code&)> callback)
+{
+    std::variant<T> var{std::move(value)};
+
+    conn->async_method_call(
+        [callback, path, property](const boost::system::error_code ec) {
+            if (ec) {
+                phosphor::logging::log<phosphor::logging::level::ERR>(("Set " + path + " " + property + " failed: " + ec.message()).c_str());
+            }
+            if (callback) {
+                callback(ec);
+            }
+        },
+        service, path, "org.freedesktop.DBus.Properties", "Set", iface, property, var);
+}
+
+inline void async_get_subtree(std::shared_ptr<sdbusplus::asio::connection> conn,
+                       const std::string& path,
+                       int32_t depth,
+                       const std::vector<std::string>& interfaces,
+                       std::function<void(SubTree)> callback) {
+    conn->async_method_call(
+        [callback](const boost::system::error_code ec, sdbusplus::message::message& m) {
+            if (ec) {
+                callback({});
+                return;
+            }
+            SubTree tree;
+            m.read(tree);
+            callback(tree);
+        },
+        "xyz.openbmc_project.ObjectMapper", "/xyz/openbmc_project/object_mapper",
+        "xyz.openbmc_project.ObjectMapper", "GetSubTree", path, depth, interfaces);
+}
+
+
 
 }
 }

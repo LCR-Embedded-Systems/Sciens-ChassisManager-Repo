@@ -1,0 +1,14 @@
+[Unit]
+Description=Mount qspi-policybits (mtd6) JFFS2 for persistent policy bits storage
+DefaultDependencies=no
+After=local-fs-pre.target systemd-tmpfiles-setup.service
+Before=rsyslog.service xyz.openbmc_project.Logging.service sel-logger.service
+
+[Mount]
+What=/dev/mtdblock6
+Where=/var/policybits
+Type=jffs2
+Options=rw,noatime
+
+[Install]
+WantedBy=local-fs.target

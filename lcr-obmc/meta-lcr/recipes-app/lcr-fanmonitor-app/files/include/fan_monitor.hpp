@@ -48,15 +48,21 @@ struct fan_element {
     std::string fantarget_path;
     std::string name;
     uint64_t pwm;
+    uint64_t pwm_bitmax;
     int tach;
+    int highthresh;
+    int lowthresh;
+    int warnhighthresh;
+    int warnlowthresh;
     int num;
     int pwm_enable;
     int fan_enable;
     bool first;
+    std::string parentName;
     fan_element(std::string pwm_p, std::string tach_p, std::string pen_p, std::string fen_p, std::string ffault_p, 
-        std::string ftarg_p, std::string n, int pwm_init, int tach_init, int number, int pen, int fen, bool firsten) : pwm_path(pwm_p), 
+        std::string ftarg_p, std::string n, int pwm_init, int tach_init, int number, int pen, int fen, int pwm_bitmax_arg, bool firsten) : pwm_path(pwm_p), 
         tach_path(tach_p), pwmenable_path(pen_p), fanenable_path(fen_p), fanfault_path(ffault_p), 
-        fantarget_path(ftarg_p), name(n), pwm(pwm_init), tach(tach_init), num(number), pwm_enable(pen), fan_enable(fen), first(firsten) {}
+        fantarget_path(ftarg_p), name(n), pwm(pwm_init), tach(tach_init), num(number), pwm_enable(pen), fan_enable(fen), pwm_bitmax(pwm_bitmax_arg), first(firsten) {}
 };
 
 class fan_monitor
@@ -73,6 +79,7 @@ class fan_monitor
         int read_controller_val(std::string path);
 
         void fan_enable(std::string fen_path);
+        void pwmflag_enable(std::string pen_path);
 
         void update_readings();
 
@@ -87,8 +94,13 @@ class fan_monitor
 
         void schedule_update();
 
+        bool writeConfigJson();
+
     private:
-        
+    
+        std::vector<std::string> explore_dir();
+        std::optional<std::tuple<int, int>> get_hwmon_i2c_bus_addr(const std::string& hwmon_dir);
+
         std::shared_ptr<sdbusplus::asio::connection> conn;
         sdbusplus::asio::object_server& obj_server;
 

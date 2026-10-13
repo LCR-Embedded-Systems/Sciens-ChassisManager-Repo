@@ -41,6 +41,8 @@
 #include <iostream>
 #include <sstream>
 
+std::ofstream sel_dbgfile("sel.dbg.log", std::ios::app);
+
 struct DBusInternalError final : public sdbusplus::exception_t
 {
     const char* name() const noexcept override
@@ -66,6 +68,7 @@ struct DBusInternalError final : public sdbusplus::exception_t
 #ifndef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
 static bool getSELLogFiles(std::vector<std::filesystem::path>& selLogFiles)
 {
+    sel_dbgfile << "getSELLogFiles enter" << std::endl;
     // Loop through the directory looking for ipmi_sel log files
     for (const std::filesystem::directory_entry& dirEnt :
          std::filesystem::directory_iterator(selLogDir))
@@ -82,6 +85,7 @@ static bool getSELLogFiles(std::vector<std::filesystem::path>& selLogFiles)
     // can just sort the list to get them in order from newest to oldest
     std::sort(selLogFiles.begin(), selLogFiles.end());
 
+    sel_dbgfile << "getSELLogFiles exit" << std::endl;
     return !selLogFiles.empty();
 }
 
@@ -108,6 +112,7 @@ std::vector<uint16_t> nextRecordsCache;
 
 static void backupCacheToFile()
 {
+    sel_dbgfile << "backupCacheToFile enter" << std::endl;
     std::ofstream nextRecordStream(selLogDir / nextRecordFilename);
     for (auto recordIds : nextRecordsCache)
     {
@@ -117,10 +122,12 @@ static void backupCacheToFile()
 
 uint16_t getNewRecordId()
 {
+    sel_dbgfile << "getNewRecordId enter" << std::endl;
     uint16_t nextRecordId = nextRecordsCache.back();
     // Check if SEL is full
     if (nextRecordId == selInvalidRecID)
     {
+        sel_dbgfile << "getNewRecordId first return: " << nextRecordId << std::endl;
         return nextRecordId;
     }
     nextRecordsCache.pop_back();
@@ -129,11 +136,14 @@ uint16_t getNewRecordId()
         nextRecordsCache.push_back(nextRecordId + 1);
     }
     backupCacheToFile();
+    
+    sel_dbgfile << "getNewRecordId final return: " << nextRecordId << std::endl;
     return nextRecordId;
 }
 
 static void initializeRecordId()
 {
+    sel_dbgfile << "initializeRecordId enter (but faded)" << std::endl;
     std::ifstream nextRecordStream(selLogDir / nextRecordFilename);
     if (!nextRecordStream.is_open())
     {
@@ -275,6 +285,7 @@ static void selDeleteRecord(const uint16_t& recordId)
 #else
 static unsigned int initializeRecordId()
 {
+    sel_dbgfile << "initializeRecordId enter" << std::endl;
     std::vector<std::filesystem::path> selLogFiles;
     if (!getSELLogFiles(selLogFiles))
     {
@@ -366,6 +377,7 @@ static uint16_t selAddOemRecord(
     [[maybe_unused]] const std::string& message,
     const std::vector<uint8_t>& selData, const uint8_t& recordType)
 {
+    sel_dbgfile << "selAddOemRecord enter" << std::endl;
     // A maximum of 13 bytes of SEL event data are allowed in an OEM record
     if (selData.size() > selOemDataMaxSize)
     {
@@ -375,6 +387,7 @@ static uint16_t selAddOemRecord(
     toHexStr(selData, selDataStr);
 
 #ifdef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
+    sel_dbgfile << "selAddOemRecord SEL_LOGGER_SEND_TO_LOGGING_SERVICE enter" << std::endl;
     sdbusplus::message_t AddToLog = conn->new_method_call(
         "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
         "xyz.openbmc_project.Logging.Create", "Create");
@@ -410,6 +423,7 @@ static uint16_t selAddOemRecord(
 
 int main(int, char*[])
 {
+    sel_dbgfile << "main enter" << std::endl;
 #ifndef SEL_LOGGER_SEND_TO_LOGGING_SERVICE
 #ifdef SEL_LOGGER_ENABLE_SEL_DELETE
     initializeRecordId();
@@ -433,6 +447,7 @@ int main(int, char*[])
         [conn](const std::string& message, const std::string& path,
                const std::vector<uint8_t>& selData, const bool& assert,
                const uint16_t& genId) {
+                sel_dbgfile << "main selAddSystemRecord call" << std::endl;
             return selAddSystemRecord(conn, message, path, selData, assert,
                                       genId);
         });

@@ -164,11 +164,6 @@ RDEPENDS:${PN}-debug-collector = " \
         phosphor-debug-collector-scripts \
         "
 
-SUMMARY:${PN}-settings = "Settings applications"
-RDEPENDS:${PN}-settings = " \
-        phosphor-settings-manager \
-        "
-
 SUMMARY:${PN}-network = "BMC Network Manager"
 RDEPENDS:${PN}-network = " \
         phosphor-network \

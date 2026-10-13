@@ -15,6 +15,7 @@
 #include <cmath>
 #include <fstream>
 #include <variant>
+#include <tuple>
 #include <vector>
 #include <string>
 #include <filesystem>

@@ -9,7 +9,8 @@ PAYLOAD TEST RESULTS DEFINITION
 
 PayloadTestResults::PayloadTestResults(std::shared_ptr<sdbusplus::asio::connection> conn_ref,
                 sdbusplus::asio::object_server& server_ref)
-    : conn(conn_ref), obj_server(server_ref), timer(conn->get_io_context()) {
+    : conn(conn_ref), obj_server(server_ref), timer(conn->get_io_context()) 
+{
     obj_server.add_manager("/xyz/openbmc_project/sensors");
     phosphor::logging::log<phosphor::logging::level::INFO>("PayloadTestResults initialization");
     sensor_path = "/xyz/openbmc_project/sensors/mandatoryNumbers/VSO_PAYL_TEST";
@@ -44,7 +45,17 @@ void PayloadTestResults::expose_sensor() {
         sdbusplus::vtable::property_::emits_change,
         [this](const auto&) { return current_value; }
     );
+    value_iface->register_property_r<double>(
+        "Byte3",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const auto&) { return byte3; }
+    );
 
+    value_iface->register_property_r<double>(
+        "Byte4",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const auto&) { return byte4; }
+    );
     // Register other required properties for Sensor.Value with defaults
     value_iface->register_property_r<int64_t>(
         "MaxValue",
@@ -88,10 +99,10 @@ void PayloadTestResults::expose_sensor() {
 
 void PayloadTestResults::async_update_interface() {
     // phosphor::logging::log<phosphor::logging::level::INFO>("PayloadTestResults async_update_interface enter");
-    async_get_all_alarms_status([this](uint8_t val) {
+    async_get_payload_results([this](uint8_t val) {
         double new_val = static_cast<double>(val);
-        if (new_val != this->current_value) {
-            this->current_value = new_val;
+        if (new_val != this->byte4) {
+            this->byte4 = new_val;
             if (this->value_iface) {
                 this->emit_value_changed();
             }
@@ -115,41 +126,25 @@ void PayloadTestResults::schedule_update() {
 }
 
 // Asynchronous get_all_alarms_status with short-circuit on first alarm
-void PayloadTestResults::async_get_all_alarms_status(std::function<void(uint8_t)> callback) {
-    // phosphor::logging::log<phosphor::logging::level::INFO>("PayloadTestResults async_get_all_alarms_status enter");
-    std::string threshold_interface = "xyz.openbmc_project.Sensor.Threshold.Critical";
-    std::string tempstub = "/xyz/openbmc_project/sensors/temperature";
-    std::string tachstub = "/xyz/openbmc_project/sensors/fan_tach";
-    std::string adcstub = "/xyz/openbmc_project/sensors/voltage";
-
-    std::vector<std::string> stubs = {tempstub, tachstub, adcstub}; stubs = {tempstub, tachstub, adcstub};
-    auto check_next = std::make_shared<size_t>(0);
-    auto alarm_active = std::make_shared<bool>(false);
-
-    auto done = [callback, alarm_active]() {
-        callback(*alarm_active ? 0x02 : 0x01);
-    };
-
-    auto check_ptr = std::make_shared<std::function<void()> >();
-    *check_ptr = [this, stubs, check_next, alarm_active, done, threshold_interface, check_ptr]() mutable {
-        if (*alarm_active || *check_next >= stubs.size()) {
-            // phosphor::logging::log<phosphor::logging::level::INFO>("PayloadTestResults async_get_all_alarms_status finished checking alarms. running done");
-            done();
-            return;
-        }
-        std::string stub = stubs[*check_next];
-        ++(*check_next);
-        phosphor::interface::util::async_alarm_check(conn, stub, threshold_interface, 0,
-            [alarm_active, check_ptr](bool res) {
-                if (res) {
-                    // phosphor::logging::log<phosphor::logging::level::INFO>("PayloadTestResults async_get_all_alarms_status an alarm is set");
-                    *alarm_active = true;
+void PayloadTestResults::async_get_payload_results(std::function<void(uint8_t)> callback) {
+    boost::asio::post(conn->get_io_context(), [this, callback]() {  // run on main thread
+        uint8_t result = 0x02;
+        try {
+            std::ifstream file("/usr/payload_test/result_flag");
+            if (file.is_open()) {
+                int flag_value = 0;
+                if (file >> flag_value) {
+                    result = (flag_value == 1) ? 0x01 : 0x02;
                 }
-                (*check_ptr)();
-            });
-    };
-    (*check_ptr)();
-    // phosphor::logging::log<phosphor::logging::level::INFO>("PayloadTestResults async_get_all_alarms_status exit");
+                file.close();
+            }
+        } catch (const std::exception& e) {
+            phosphor::logging::log<phosphor::logging::level::ERR>(
+                "Failed to read result_flag file",
+                phosphor::logging::entry("ERROR=%s", e.what()));
+        }
+        callback(result);
+    });
 }
 
 // Start the asynchronous update cycle

@@ -41,9 +41,13 @@ class CLI
 
         int display_alarms();
 
-        int set_threshold(std::string type, std::string itemname, std::string highorlow, double value);
+        int display_services();
+
+        int set_threshold(std::string type, std::string itemname, std::string warnorcrit, std::string highorlow, double value);
 
         int process_argument(int nargs, char* args[]);
+
+        void displayCommands();
 
     private:
 

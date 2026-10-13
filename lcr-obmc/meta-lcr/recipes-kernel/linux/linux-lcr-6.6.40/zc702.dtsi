@@ -5,6 +5,7 @@
  * (C) Copyright 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
  */
 #include "include/dt-bindings/gpio/gpio.h"
+#include <dt-bindings/interrupt-controller/irq.h>
 
 / {
 	model = "Xilinx ZC702 board";

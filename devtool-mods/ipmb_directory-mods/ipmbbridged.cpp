@@ -369,7 +369,7 @@ void IpmbChannel::processI2cEvent()
             snprintf(byteStr, sizeof(byteStr), " %02x", buffer[i]);
             hexDump += byteStr;
         }
-        phosphor::logging::log<phosphor::logging::level::INFO>(hexDump.c_str());
+        // phosphor::logging::log<phosphor::logging::level::INFO>(hexDump.c_str());
     }
     else
     {
@@ -922,8 +922,8 @@ auto ipmbHandleRequest = [](boost::asio::yield_context yield,
     IpmbChannel* channel = getChannel(reqChannel);
 
     if (channel->getRqSlaveAddress() != addr) {
-        std::string logMsgT = "ipmbHandleRequest: new address requested. changing slave address to: " + std::to_string(addr);
-        phosphor::logging::log<phosphor::logging::level::INFO>(logMsgT.c_str());
+        // std::string logMsgT = "ipmbHandleRequest: new address requested. changing slave address to: " + std::to_string(addr);
+        // phosphor::logging::log<phosphor::logging::level::INFO>(logMsgT.c_str());
         if (addr != 0x20) {
             channel->updateRqSlaveAddress(addr);
         }

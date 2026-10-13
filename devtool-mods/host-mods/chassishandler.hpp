@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include <cstddef>
+#include <nlohmann/json.hpp>
 
 // IPMI commands for Chassis net functions.
 enum ipmi_netfn_chassis_cmds

@@ -67,6 +67,8 @@ class IPMBLinkSensor {
         std::unique_ptr<sdbusplus::asio::dbus_interface> value_iface;
         std::unique_ptr<sdbusplus::asio::dbus_interface> assoc_iface;
         double current_value = 0.0;
+        double byte3 = 0.0;
+        double byte4 = 0.0;
         boost::asio::steady_timer timer;
         void emit_value_changed();
         std::string sensor_path;
@@ -74,7 +76,7 @@ class IPMBLinkSensor {
     public: 
         IPMBLinkSensor(std::shared_ptr<sdbusplus::asio::connection> conn_ref, sdbusplus::asio::object_server& server_ref);
         ~IPMBLinkSensor();
-        void async_get_all_alarms_status(std::function<void(uint8_t)> callback);
+        void async_get_ipmb_status(std::function<void(uint8_t)> callback);
         void start_updates();
         void expose_sensor();
         void async_update_interface();

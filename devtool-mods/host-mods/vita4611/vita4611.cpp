@@ -2,7 +2,6 @@
 using namespace phosphor::logging;
 
 //VITA4611CM vita4611_manager;
-std::ofstream dbgFile("lcr.ipmid.log");
 
 VITA4611_ChassisManager& getChassisManager()
 {
@@ -113,14 +112,10 @@ void init_vita4611()
     );
 
     if (bRet == false) {
-        dbgFile << "LCR:IPMI: Registering handler for " << (int)ipmi::LCR::netFnLCR << 
-            " " << (int)ipmi::LCR::netFnLCRcmddevicelist <<
-            " failed" << std::endl;
+
     }
     else {
-        dbgFile << "LCR:IPMI: Registering handler for " << (int)ipmi::LCR::netFnLCR << 
-            " " << (int)ipmi::LCR::netFnLCRcmddevicelist <<
-            " SUCCESS" << std::endl;        
+
     }
 
     /*
@@ -137,14 +132,10 @@ void init_vita4611()
         lcrcmdpassthrough);
 
     if (bRet == false) {
-        dbgFile << "LCR:IPMI: Registering handler for " << (int)ipmi::LCR::netFnLCR << 
-            " " << (int)ipmi::LCR::netFnLCRcmdpassthrough <<
-            " failed" << std::endl;
+
     }
     else {
-        dbgFile << "LCR:IPMI: Registering handler for " << (int)ipmi::LCR::netFnLCR << 
-            " " << (int)ipmi::LCR::netFnLCRcmdpassthrough <<
-            " SUCCESS" << std::endl;        
+
     }
 
 
@@ -156,19 +147,32 @@ void init_vita4611()
     Manager shall periodically poll that IPMC with a “Get Device SDR Info” request to 
     monitor for the Sensor Population Change indicator
     */
+
+    log<level::INFO>("VITA4611 Checking system reset and stalling the initialization of the sensor polling until sr is high");
+    std::ifstream srstatus_file("/usr/share/sr_status");
+    int srstatus_flag = 0;
+    srstatus_file >> srstatus_flag;
+    srstatus_file.close();
+    while (srstatus_flag != 1) {        
+        std::ifstream srstatus_file("/usr/share/sr_status");
+        srstatus_file >> srstatus_flag;
+        srstatus_file.close();
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     pollSensors();
     pollSDRs();
     sensorPollTimer = std::make_unique<phosphor::Timer>( 
         []()
         {
-        pollSensors();
-        pollSDRs();
+            pollSensors();
+            pollSDRs();
         }
     );
     sensorPollTimer->start(std::chrono::seconds(600), true);
 
-    dbgFile.flush();
 
     log<level::INFO>("[EXIT] VITA4611::init_vita4611");
 }
@@ -178,6 +182,4 @@ void shutdown_vita4611()
     log<level::INFO>("[ENTRY] shutdown_vita4611");
     getChassisManager().sendShutdown();
     log<level::INFO>("[EXIT] shutdown_vita4611");
-    dbgFile.flush();
-    /* destructor of dbgFile will close it*/
 }

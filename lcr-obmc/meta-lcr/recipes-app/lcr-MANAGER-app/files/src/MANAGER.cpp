@@ -1,23 +1,192 @@
 #include "../include/MANAGER.hpp"
 
 std::ofstream boot_dbgfile("boot_lcr.dbg.log", std::ios::app);
+std::ofstream srstatus_file("/usr/share/sr_status", std::ios::out | std::ios::trunc);
 std::ofstream system_logs("system_logs.log", std::ios::app);
 
-const size_t MAX_SIZE = 1024 * 1024;  // 1 MB in bytes
+const size_t MAX_SIZE = 256 * 1024;  // 256 kB in bytes
 
+typedef std::tuple<int, uint8_t, uint8_t, uint8_t, uint8_t, std::vector<uint8_t>> ipmb_response_return_type_t;
 
-struct ADCpaths
+/*
+* sendIPMBRequest (repurposed from vita 4611 implementation in phosphor-ipmi-host)
+* This function sends a IPMI request over i2c bus
+* using the d-bus method sendRequest provided by ipmbbridge
+* Channel :- Channel initialized by ipmbbridged based on its
+        JSON script
+
+* netfn , lun , cmd are copied in the IPMI request on the i2c bus
+* data (optional depends on above) is copied to IPMI request
+*
+* If the response fails (or timesout ) nullopt is returned. 
+* caller can optionally look at the cc value that is returned
+* as an output parameter
+*/
+std::optional<ipmb_response_return_type_t> sendIPMBRequest(
+    [[maybe_unused]] const uint8_t channel, //either 0 or 4, 4 -> ipmb b, 0 -> ipmb a
+    const uint8_t addr,
+    const uint8_t netfn, 
+    const uint8_t lun, 
+    const uint8_t cmd, 
+    std::vector<uint8_t> &data,
+    uint8_t *ipmi_response_cc, /* out */
+    bool verbose
+)
 {
-    std::string V12path = "/sys/bus/iio/devices/iio:device0/in_voltage9_raw";
-    std::string V3_3path = "/sys/bus/iio/devices/iio:device0/in_voltage10_raw";
-    std::string V5path = "/sys/bus/iio/devices/iio:device0/in_voltage11_raw";
-    std::string V3_3Auxpath = "/sys/bus/iio/devices/iio:device0/in_voltage12_raw";
-    std::string Vp12Auxpath = "/sys/bus/iio/devices/iio:device0/in_voltage13_raw";
-    std::string Vn12Auxpath = "/sys/bus/iio/devices/iio:device0/in_voltage14_raw";
-};
+    
+    if (verbose) {
+        std::ostringstream oss;
+        oss << "Sending IPMB request with the following data:\n"
+            << "\tchannel: " << static_cast<int>(channel) << "\n"
+            << "\taddress: " << static_cast<int>(addr) << "\n"
+            << "\tnetfn: "   << static_cast<int>(netfn) << "\n"
+            << "\tlun: "     << static_cast<int>(lun) << "\n"
+            << "\tcmd: "     << static_cast<int>(cmd) << "\n"
+            << "\tdata: ";
+
+        for (const auto& byte : data) {
+            oss << "0x" << std::hex << std::uppercase << static_cast<int>(byte) << " ";
+        }
+        oss << std::dec << std::nouppercase;
+
+        if (channel == 4) {
+            oss << "\nLCR:IPMID: using ipmb b";
+        } else if (channel == 0) {
+            oss << "\nLCR:IPMID: using ipmb a";
+        }
+
+        // Log the full detailed message
+        phosphor::logging::log<phosphor::logging::level::INFO>(
+            oss.str().c_str()
+        );
+    }
+
+    static int ipmb_flip = 0;
+    bool ipmb_a;
+    bool ipmb_b;
+    
+    try {
+        std::ifstream file("/usr/share/ipmb_a_enable");
+        if (file.is_open()) {
+            int flag_value = 0;
+            if (file >> flag_value) {
+                if (flag_value == 1) {
+                    ipmb_a = true;  
+                } else {
+                    ipmb_a = false;
+                }
+            }
+            file.close();
+        }
+    } catch (const std::exception& e) {
+        phosphor::logging::log<phosphor::logging::level::ERR>(
+            "Failed to read ipmb_a_enable file",
+            phosphor::logging::entry("ERROR=%s", e.what()));
+    }
+
+    try {
+        std::ifstream file("/usr/share/ipmb_b_enable");
+        if (file.is_open()) {
+            int flag_value = 0;
+            if (file >> flag_value) {
+                if (flag_value == 1) {
+                    ipmb_b = true;  
+                } else {
+                    ipmb_b = false;
+                }
+            }
+            file.close();
+        }
+    } catch (const std::exception& e) {
+        phosphor::logging::log<phosphor::logging::level::ERR>(
+            "Failed to read ipmb_b_enable file",
+            phosphor::logging::entry("ERROR=%s", e.what()));
+    }
+
+    uint8_t channel_sender = 0x00;
+
+    try
+    {
+        auto bus = sdbusplus::bus::new_default();
+        // Prepare the DBus method call
+        auto method = bus.new_method_call(
+            "xyz.openbmc_project.Ipmi.Channel.Ipmb",       // Service
+            "/xyz/openbmc_project/Ipmi/Channel/Ipmb",      // Object path
+            "org.openbmc.Ipmb",                            // Interface
+            "sendRequest");                                // Method
+
+        // Append parameters
+        method.append(channel_sender, addr, netfn, lun, cmd, data);
+
+        // Call the method synchronously
+        constexpr uint64_t T3_TIMEOUT_US = 250'000;
+        auto reply = bus.call(method, T3_TIMEOUT_US);
+
+        bool retrysuccess = false;
+
+        int ipmb_flip_retry = ipmb_flip ^ 1;
+        //Rule 5.1.1-9, retry with timeout every time until
+        if (reply.is_method_error())
+        {
+            for (int retries = 0; retries < 5; retries++) {
+                /*
+                Rule 5.1.1-6 When IPMB-B is implemented, a VITA 46.11 compliant ChMC that is unable to successfully 
+                transmit an IPMI message across one of its System IPMB interfaces shall attempt to resend the 
+                unsuccessfully transmitted IPMI message over its alternate IPMB interface.
+                */
+                phosphor::logging::log<phosphor::logging::level::INFO>("LCR:IPMID: retry ipmb message with alternate ipmb per Rule 5.1.1-6");
+                auto method_retry = bus.new_method_call(
+                        "xyz.openbmc_project.Ipmi.Channel.Ipmb",       // Service
+                        "/xyz/openbmc_project/Ipmi/Channel/Ipmb",      // Object path
+                        "org.openbmc.Ipmb",                            // Interface
+                        "sendRequest");                                // Method
+
+                // Append parameters
+                
+                channel_sender = static_cast<uint8_t>(ipmb_flip_retry * 4);
+                method_retry.append(channel_sender, addr, netfn, lun, cmd, data);
+
+                ipmb_flip_retry ^= 1;
+                reply = bus.call(method_retry, T3_TIMEOUT_US);
+
+                if (!reply.is_method_error()) {
+                    retrysuccess = true;
+                    break;
+                }
+            }
+            if (!retrysuccess) { return std::nullopt; }
+        }
+
+        std::tuple<int, uint8_t, uint8_t, uint8_t, uint8_t, std::vector<uint8_t>> result;
+        uint8_t cc;
+
+        reply.read(result);
+        cc = std::get<4>(result);
+
+        if (!cc) {
+            // success
+            *ipmi_response_cc = cc;
+            return result;
+        }
+        else {
+            *ipmi_response_cc = cc;
+            return std::nullopt;
+        }
+    }
+    catch (const std::exception& e)
+    {
+        *ipmi_response_cc = 0xFF; /* TODO revisit this later */
+        return std::nullopt;
+    }
+
+    /* We should never come here since the try catch should catch everything */
+    *ipmi_response_cc = 0xFF;
+    return std::nullopt;
+}
 
 // Check if D-Bus system is ready
-bool isDBusReady() {
+bool isDBusReady() 
+{
     sd_bus *bus = NULL;
     sd_bus_error error = SD_BUS_ERROR_NULL;
     sd_bus_message *msg = NULL;
@@ -45,25 +214,24 @@ bool isDBusReady() {
 }
 
 // Helper function to check if a systemd service is active
-bool isServiceActive(const std::string& serviceName) {
-    const int max_retries = 5;  // Increased from 3
+bool isServiceActive(const std::string& serviceName) 
+{
+    const int max_retries = 5;
     const int base_delay_ms = 1000;  // Longer base delay
     const int max_delay_ms = 5000;
     
     // First, wait for D-Bus to be ready
     int dbus_wait_attempts = 0;
-    const int max_dbus_wait = 10;  // Wait up to ~30 seconds for D-Bus
+    const int max_dbus_wait = 10;
     
     while (!isDBusReady() && dbus_wait_attempts < max_dbus_wait) {
-        boot_dbgfile << "[" << currentTimestamp() << "] " 
-                     << "Waiting for D-Bus to become ready..." << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("isServiceActive: Waiting for DBus to become ready");
         std::this_thread::sleep_for(std::chrono::milliseconds(3000));
         dbus_wait_attempts++;
     }
     
     if (dbus_wait_attempts >= max_dbus_wait) {
-        boot_dbgfile << "[" << currentTimestamp() << "] " 
-                     << "D-Bus did not become ready, proceeding anyway" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("isServiceActive: D-Bus did not become ready, proceeding anyway");
     }
     
     for (int attempt = 1; attempt <= max_retries; ++attempt) {
@@ -85,7 +253,6 @@ bool isServiceActive(const std::string& serviceName) {
             // Set a timeout on the bus connection
             sd_bus_set_method_call_timeout(bus, 5000000);  // 5 second timeout
 
-            // Use LoadUnit which is more robust
             r = sd_bus_call_method(bus,
                                   "org.freedesktop.systemd1",
                                   "/org/freedesktop/systemd1",
@@ -138,6 +305,7 @@ bool isServiceActive(const std::string& serviceName) {
             
         } catch (const std::exception& e) {
             // Log error
+            phosphor::logging::log<phosphor::logging::level::INFO>("isServiceActive: Error checking service");
             boot_dbgfile << "[" << currentTimestamp() << "] " 
                         << "Attempt " << attempt << " error checking service " 
                         << serviceName << ": " << e.what() << std::endl;
@@ -156,14 +324,113 @@ bool isServiceActive(const std::string& serviceName) {
         }
     }
     
-    boot_dbgfile << "[" << currentTimestamp() << "] " 
-                 << "Failed to check service " << serviceName 
-                 << " after " << max_retries << " attempts" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("isServiceActive: Failed to check service");
     
     return false;
 }
 
-nlohmann::json Manager::readJson(std::string path) {
+void recover_log_offsets(int fd, size_t mtd_size, size_t erase_size,
+                         off_t& oldest_offset, off_t& write_offset)
+{
+    oldest_offset = 0;
+    write_offset = 0;
+
+    std::vector<std::pair<off_t, off_t>> dirty_regions;
+
+    for (off_t block = 0; block < static_cast<off_t>(mtd_size); block += erase_size) {
+        std::vector<uint8_t> buf(erase_size);
+        if (lseek(fd, block, SEEK_SET) < 0) break;
+        ssize_t rb = read(fd, buf.data(), erase_size);
+        if (rb != static_cast<ssize_t>(erase_size)) break;
+
+        off_t first = -1, last = -1;
+        for (size_t i = 0; i < erase_size; ++i) {
+            if (buf[i] != 0xFF) {
+                if (first == -1) first = i;
+                last = i;
+            }
+        }
+        if (first != -1) {
+            off_t rstart = block + first;
+            off_t rend   = block + last + 1;
+
+            if (!dirty_regions.empty()) {
+                auto& prev = dirty_regions.back();
+                if (rstart <= prev.second) {
+                    prev.second = std::max(prev.second, rend);
+                } else {
+                    dirty_regions.emplace_back(rstart, rend);
+                }
+            } else {
+                dirty_regions.emplace_back(rstart, rend);
+            }
+        }
+    }
+
+    if (dirty_regions.empty()) {
+        oldest_offset = 0;
+        write_offset = 0;
+        return;
+    }
+
+    if (dirty_regions.size() == 1) {
+        oldest_offset = dirty_regions[0].first;
+        write_offset  = dirty_regions[0].second;
+    } else if (dirty_regions.size() == 2) {
+        boot_dbgfile << "[" << currentTimestamp() << "] LCR:BOOT: dirty_regions is 2" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("recover_log_offsets: dirty_regions is 2");
+        auto& r_low  = dirty_regions[0];
+        auto& r_high = dirty_regions[1];
+
+        if (r_low.first < erase_size && r_high.second > mtd_size - erase_size) {
+            oldest_offset = r_high.first;
+
+            int fd2 = open("/dev/mtd4", O_RDONLY);
+            if (fd2 >= 0) {
+                size_t low_len = r_low.second - r_low.first;
+                std::vector<uint8_t> buf(low_len);
+                lseek(fd2, r_low.first, SEEK_SET);
+                read(fd2, buf.data(), low_len);
+                close(fd2);
+
+                off_t best = r_low.first;   // at minimum the start of low region
+
+                // Walk the buffer looking for valid lines: [....]\n
+                size_t pos = 0;
+                while (pos < low_len) {
+                    // find next '['
+                    auto it = std::find(buf.begin() + pos, buf.end(), '[');
+                    if (it == buf.end()) break;
+                    size_t start = it - buf.begin();
+
+                    // find next '\n' after it
+                    auto nl_it = std::find(buf.begin() + start, buf.end(), '\n');
+                    if (nl_it == buf.end()) break;
+                    size_t nl = nl_it - buf.begin();
+
+                    size_t line_len = nl - start;
+                    if (line_len > 0 && line_len < 1024 && buf[start] == '[') {
+                        // valid line - advance best past its '\n'
+                        best = r_low.first + nl + 1;
+                    }
+                    pos = nl + 1;
+                }
+                write_offset = best;
+                phosphor::logging::log<phosphor::logging::level::INFO>(("recover_log_offsets: best write_offset: " + std::to_string(write_offset)).c_str());
+            } else {
+                write_offset = r_low.second;   // fallback
+                phosphor::logging::log<phosphor::logging::level::INFO>(("recover_log_offsets: r_low.second write_offset: " + std::to_string(write_offset)).c_str());
+            }
+        } else {
+            phosphor::logging::log<phosphor::logging::level::INFO>("recover_log_offsets: unexpected region layout, starting fresh");
+            oldest_offset = 0;
+            write_offset = 0;
+        }
+    }
+}
+
+nlohmann::json Manager::readJson(std::string path) 
+{
     std::ifstream f(path);
 
     nlohmann::json read;
@@ -177,46 +444,264 @@ nlohmann::json Manager::readJson(std::string path) {
     return read;
 }
 
-void Manager::init_system_logs() {
+Manager::Manager(bool simflag) : sim(simflag)
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("Manager init enter");
+    srstatus_file.seekp(0);
+    srstatus_file << 0 << std::endl;
+    srstatus_file.flush();
+    move_config();
+    fs::path end0_source_file = "/lib/systemd/network/60-phosphor-networkd-end0.network";
+    fs::path end1_source_file = "/lib/systemd/network/60-phosphor-networkd-end1.network";
+    fs::path target_dir = "/var/persistent";
+    fs::path end0_destination = target_dir / end0_source_file.filename();
+    fs::path end1_destination = target_dir / end1_source_file.filename();
+    
+    if (!fs::exists(end0_destination)) {
+        fs::copy_file(end0_source_file, end0_destination, fs::copy_options::overwrite_existing);    
+    }
+    if (!fs::exists(end1_destination)) {
+        fs::copy_file(end1_source_file, end1_destination, fs::copy_options::overwrite_existing);    
+    }
+    
+    fs::copy_file(end0_destination, end0_source_file, fs::copy_options::overwrite_existing);
+    fs::copy_file(end1_destination, end1_source_file, fs::copy_options::overwrite_existing);
+
+    phosphor::logging::log<phosphor::logging::level::INFO>("Manager init reading json");
+    configJson = readJson("/usr/share/lcr_configs/bus_devices.json");
+
+    ADCpaths paths;
+
+    std::string stub = "/sys/bus/iio/devices/";
+    
+
+    phosphor::logging::log<phosphor::logging::level::INFO>("Manager init parsing adcs");
+    for (auto& adc_dir : configJson["adcsensors"].items()) {
+        boot_dbgfile << "[" << currentTimestamp() << "] " << adc_dir.key() << " bus: " << configJson["adcsensors"][adc_dir.key()]["bus"] << std::endl;
+        if (configJson["adcsensors"][adc_dir.key()]["bus"] == 0 && configJson["adcsensors"][adc_dir.key()]["address"] == 0) { // bus and address is 0, this is the vpx bus
+            
+            for (const auto& entry : fs::directory_iterator("/sys/bus/iio/devices")) {
+                // Resolve symlinks, ".", and ".." to get the absolute canonical path
+                std::error_code ec;
+                fs::path canonical_path = fs::canonical(entry.path(), ec);
+                if (ec) {
+                    continue;
+                }
+
+                if (canonical_path.string().find(adc_dir.key()) != std::string::npos && canonical_path.string().find("trigger") == std::string::npos) {
+                    stub = entry.path().string();
+                    directory = adc_dir.key();
+                    phosphor::logging::log<phosphor::logging::level::INFO>(("Manager found path of xadc " + entry.path().string()).c_str());
+                    phosphor::logging::log<phosphor::logging::level::INFO>(("Manager canonical path of xadc " + canonical_path.string()).c_str());
+                }
+            }
+
+            // if (!std::filesystem::is_directory(stub + adc_dir.key())) {
+            //     stub += "iio:device0";
+            //     directory = adc_dir.key();
+            //     phosphor::logging::log<phosphor::logging::level::INFO>(("MANAGER: " + adc_dir.key() + " does not exist, using default").c_str());
+            //     break;
+            // }
+            // stub += adc_dir.key();
+            // directory = adc_dir.key();
+            // phosphor::logging::log<phosphor::logging::level::INFO>(("MANAGER: " + adc_dir.key() + " bus and address are 0").c_str());
+            
+        }
+    }
+
+    paths.V12path     = stub + "/in_voltage9_raw";
+    paths.V3_3path    = stub + "/in_voltage10_raw";
+    paths.V5path      = stub + "/in_voltage11_raw";
+    paths.V3_3Auxpath = stub + "/in_voltage12_raw";
+    paths.Vp12Auxpath = stub + "/in_voltage13_raw";
+    paths.Vn12Auxpath = stub + "/in_voltage14_raw";
+
+    fancontrol = configJson["fancontrol"];
+    SOSA = configJson["SOSA"];
+    resetLow = configJson["ResetActiveLow"];
+
+    temp_service_status = false;
+    voltage_service_status = false;
+    fan_controller_service_status = false;
+    fan_monitor_service_status = false;
+    mandatory_sensor_service_status = false;
+    gpio_service_status = false;
+    ipmi_service_status = false;
+
+    phosphor::logging::log<phosphor::logging::level::INFO>("Manager init initializing logs and writing");
+    init_system_logs();
+
+    write_log_to_file("-----------------------------------------------------------------------------------------------------------------------");
+    write_log_to_file("CHASSIS MANAGER BOOTUP");
+    write_log_to_file("Chassis name detected: " + configJson["name"].get<std::string>());
+    write_log_to_file("FPGA has finished boot. Kernel booting has begun. These logs are for the BOOT SEQUENCE AND MANAGER application.");
+    write_log_to_file("This application manages the System Reset and PS inhibit signals.");
+    write_log_to_file("Once voltages are nominal and services are active, the system reset is released, allowing the cards to boot.");
+    write_log_to_file("-----------------------------------------------------------------------------------------------------------------------");
+
+    if (!SOSA) {
+        ADCs.push_back(std::make_unique<ADC_element>("VS1",          paths.V12path,     12.0,  configJson["adcsensors"][directory.c_str()]["VS1"]["present"]));
+        ADCs.push_back(std::make_unique<ADC_element>("VS2",          paths.V3_3path,    3.3,   configJson["adcsensors"][directory.c_str()]["VS2"]["present"]));
+        ADCs.push_back(std::make_unique<ADC_element>("VS3",          paths.V5path,      5.0,   configJson["adcsensors"][directory.c_str()]["VS3"]["present"]));
+        ADCs.push_back(std::make_unique<ADC_element>("3_3auxV_Rail", paths.V3_3Auxpath, 3.3,   configJson["adcsensors"][directory.c_str()]["3_3auxV_Rail"]["present"]));
+        ADCs.push_back(std::make_unique<ADC_element>("12pauxV_Rail", paths.Vp12Auxpath, 12.0,  configJson["adcsensors"][directory.c_str()]["12pauxV_Rail"]["present"]));
+        ADCs.push_back(std::make_unique<ADC_element>("12nauxV_Rail", paths.Vn12Auxpath, -12.0, configJson["adcsensors"][directory.c_str()]["12nauxV_Rail"]["present"]));
+    } else {
+        ADCs.push_back(std::make_unique<ADC_element>("VS1",          paths.V12path,     12.0,  configJson["adcsensors"][directory.c_str()]["VS1"]["present"]));
+        ADCs.push_back(std::make_unique<ADC_element>("3_3auxV_Rail", paths.V3_3Auxpath, 3.3,   configJson["adcsensors"][directory.c_str()]["3_3auxV_Rail"]["present"]));
+    }
+
+
+    phosphor::logging::log<phosphor::logging::level::INFO>("Manager init calculate cs");
+    calculate_cs();
+
+    sysreset.input=false;
+    sysreset.chip=1;
+    sysreset.line=0;
+    sysreset.status=0;
+    sysreset.dbusflag=false;
+    sysreset.name="sysreset";
+
+    ps_enable.input=false;
+    ps_enable.chip=3;
+    ps_enable.line=3;
+    ps_enable.status=0;
+    ps_enable.dbusflag=false;
+    ps_enable.name="psenable";
+
+    ps_inhibit1.input=false;
+    ps_inhibit1.chip=3;
+    ps_inhibit1.line=2;
+    ps_inhibit1.status=0;
+    ps_inhibit1.dbusflag=false;
+    ps_inhibit1.name="ps1inh";
+
+    ps_inhibit2.input=false;
+    ps_inhibit2.chip=3;
+    ps_inhibit2.line=1;
+    ps_inhibit2.status=0;
+    ps_inhibit2.dbusflag=false;
+    ps_inhibit2.name="ps2inh";
+
+    if (find_chip_by_label(configJson["onSwitchGPIO"]["label"]) >= 0 && configJson["onSwitchGPIO"]["chip"].get<int>() >= 0) {
+        switch_gpio.input=true;
+        switch_gpio.chip=find_chip_by_label(configJson["onSwitchGPIO"]["label"]);
+        switch_gpio.line=configJson["onSwitchGPIO"]["line"];
+        switch_gpio.status=0;
+        switch_gpio.name="switch_gpio";
+        phosphor::logging::log<phosphor::logging::level::INFO>(("init_system_logs power switch found, chip: " + std::to_string(switch_gpio.chip) + " and line: " + std::to_string(switch_gpio.line)).c_str());
+    }  else {
+        switch_gpio.input=false;
+        switch_gpio.chip=-1;
+        switch_gpio.line=-1;
+        switch_gpio.status=0;
+        switch_gpio.name="switch_gpio";
+        phosphor::logging::log<phosphor::logging::level::INFO>("init_system_logs did not find power switch");
+    }
+
+    alarm_gpio.input=false;
+    alarm_gpio.chip=0;
+    alarm_gpio.line=11;
+    alarm_gpio.status=0;
+    alarm_gpio.name="alarm_gpio";
+    
+    phosphor::logging::log<phosphor::logging::level::INFO>("Manager init exit");
+}
+
+Manager::~Manager()
+{
+    ;
+}
+
+void Manager::move_config()
+{
+    fs::path default_file = "/usr/share/lcr_configs-default/bus_devices.json";
+    fs::path target_file  = "/usr/share/lcr_configs/bus_devices.json";
+    if (fs::exists(target_file)) {
+
+        nlohmann::json configJson_temp = readJson("/usr/share/lcr_configs/bus_devices.json");
+        nlohmann::json default_configJson_temp = readJson("/usr/share/lcr_configs-default/bus_devices.json");
+
+        if (configJson_temp["name"] == default_configJson_temp["name"]) {
+            return;
+        }
+    }
+    fs::copy_file(default_file, target_file, fs::copy_options::overwrite_existing);
+}
+
+void Manager::init_system_logs() 
+{
 
     //read the old logfile from flash, and load that into the logfile in the filesystem.
 
-    boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: attempting to read system logs from flash" << std::endl;
+    int fd = open("/dev/mtd4", O_RDWR | O_SYNC);
+    if (fd < 0) {
+        phosphor::logging::log<phosphor::logging::level::INFO>(("init_system_logs Failed to open /dev/mtd4 for init: " + std::string(strerror(errno))).c_str());
+        return;
+    }
 
-    offset = 0;
-    std::string filename = "/dev/mtd4";
-    std::ifstream fileo(filename);
+    mtd_info_t mtd_info;
+    if (ioctl(fd, MEMGETINFO, &mtd_info) != 0) {
+        phosphor::logging::log<phosphor::logging::level::INFO>(("init_system_logs Failed to get MTD info: " + std::string(strerror(errno))).c_str());
+        close(fd);
+        return;
+    }
 
+    phosphor::logging::log<phosphor::logging::level::INFO>("init_system_logs test recover_log_offsets");
+    boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: test recover_log_offsets" << std::endl;
+    recover_log_offsets(fd, mtd_info.size, mtd_info.erasesize, oldest_offset, offset);
+
+    phosphor::logging::log<phosphor::logging::level::INFO>(("init_system_logs oldest_offset: "      + std::to_string(static_cast<int>(oldest_offset))).c_str());
+    phosphor::logging::log<phosphor::logging::level::INFO>(("init_system_logs offset: "             + std::to_string(static_cast<int>(offset))).c_str());
+    phosphor::logging::log<phosphor::logging::level::INFO>(("init_system_logs mtd_info.size: "      + std::to_string(static_cast<int>(mtd_info.size))).c_str());
+    phosphor::logging::log<phosphor::logging::level::INFO>(("init_system_logs mtd_info.erasesize: " + std::to_string(static_cast<int>(mtd_info.erasesize))).c_str());
+    phosphor::logging::log<phosphor::logging::level::INFO>(("init_system_logs remaining space: "    + std::to_string(static_cast<int>(mtd_info.size - offset))).c_str());
+
+    close(fd);
+
+    std::ifstream fileo("/dev/mtd4", std::ios::binary);
     std::ofstream outFile("system_logs.log");
     std::string lineo;
+    off_t last_valid = 0;
 
-    int linenum = 1;
+    auto process_range = [&](off_t start, off_t end) {
+        if (start >= end) return;
 
-    while (std::getline(fileo, lineo)) {
-        size_t lineLength = lineo.length();
-        // Write line to output file with a newline
-        if (lineLength < 1024) {
-            if (!lineo.empty()){
-                if (lineo[0] == '['){
-                    offset = fileo.tellg();
-                    outFile << lineo << '\n';
-                } else {
-                    // boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: first character of strange line: " << static_cast<unsigned char>(lineo[0]) << std::endl;    
-                }
-            } else {
-                boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: skipping empty line" << std::endl;
-            }
-        } else {
-            boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: long line length: " << lineLength << std::endl;
-            boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: long line first character: " 
-                         << static_cast<unsigned char>(lineo[0]) << std::endl;
-            boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: Line number: " << linenum << std::endl;
-            boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: finished reading logs from flash" << std::endl;
-            break;
+        fileo.clear();
+        fileo.seekg(start);
+        if (!fileo) {
+            phosphor::logging::log<phosphor::logging::level::INFO>(("init_system_logs seekg failed at: "  + std::to_string(start)).c_str());
+            return;
         }
-        linenum = linenum + 1;
+        if (!sim) {
+            while (fileo.tellg() < end && std::getline(fileo, lineo)) {
+                if (!fileo) break;                    // stream went bad
+    
+                size_t len = lineo.length();
+                if (len < 1024) {
+                    if (!lineo.empty() && lineo[0] == '[') {
+                        std::streampos pos = fileo.tellg();
+                        if (pos != std::streampos(-1) && pos > last_valid) {
+                            last_valid = static_cast<off_t>(pos);
+                        }
+                        outFile << lineo << '\n';
+                    }
+                } else {
+                    phosphor::logging::log<phosphor::logging::level::INFO>("init_system_logs long line, stopping");
+                    break;
+                }
+            }
+        } 
+    };
+
+    if (offset >= oldest_offset) {
+        process_range(oldest_offset, offset);
+    } else {
+        process_range(oldest_offset, mtd_info.size);
+        process_range(0, offset);
     }
-    boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: read entire qspi-logs flash section and wrote all of it to system logs" << std::endl;
+
+    phosphor::logging::log<phosphor::logging::level::INFO>(("init_system_logs offset at the end of init: "  + std::to_string(static_cast<int>(offset))).c_str());
 }
 
 void Manager::write_log_to_file(std::string log) {
@@ -231,105 +716,149 @@ void Manager::write_log_to_file(std::string log) {
 
 }
 
-void Manager::write_logs_to_flash() {
+void Manager::write_logs_to_flash() 
+{
+
+    if (newlog_string.empty()) return;
 
     int fd = open("/dev/mtd4", O_RDWR | O_SYNC);
     if (fd < 0) {
-        boot_dbgfile << "Failed to open /dev/mtd4: " << strerror(errno) << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>(("write_logs_to_flash Failed to open /dev/mtd4: "  + std::string(strerror(errno))).c_str());
         return;
     }
 
     mtd_info_t mtd_info;
     if (ioctl(fd, MEMGETINFO, &mtd_info) != 0) {
-        boot_dbgfile << "Failed to get MTD info: " << strerror(errno) << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>(("write_logs_to_flash Failed to get MTD info: "  + std::string(strerror(errno))).c_str());
         close(fd);
         return;
     }
 
     if (!(mtd_info.flags & MTD_WRITEABLE)) {
-        boot_dbgfile << "MTD is not writable" << std::endl;
         close(fd);
         return;
     }
 
     size_t erase_size = mtd_info.erasesize;
     size_t data_size = newlog_string.size();
-    off_t start_offset = offset;
-    off_t end_offset = start_offset + data_size - 1;
+    off_t log_start = 0;
+    off_t log_end   = mtd_info.size;
 
-    if (end_offset >= static_cast<off_t>(mtd_info.size)) {
-        boot_dbgfile << "Data would exceed device size" << std::endl;
+    auto calc_used = [&](off_t w, off_t o) -> size_t {
+        if (w >= o) return w - o;
+        return (log_end - o) + (w - log_start);
+    };
+
+    size_t used = calc_used(offset, oldest_offset);
+    size_t free_space = (log_end - log_start) - used;
+
+    // erase oldest blocks until we have room
+    while (free_space < data_size && oldest_offset < log_end) {
+        off_t block = oldest_offset & ~(erase_size - 1);
+
+        erase_info_t er { .start = block, .length = erase_size };
+        ioctl(fd, MEMUNLOCK, &er);           // ignore ENOTSUP
+        if (ioctl(fd, MEMERASE, &er) != 0) {
+            boot_dbgfile << "Erase (roll) failed at " << block << ": " << strerror(errno) << std::endl;
+            phosphor::logging::log<phosphor::logging::level::INFO>(("write_logs_to_flash Erase (roll) failed at " + std::to_string(block) + ": " + std::string(strerror(errno))).c_str());
+            close(fd);
+            return;
+        }
+
+        oldest_offset = block + erase_size;
+        if (oldest_offset >= log_end) oldest_offset = log_start;
+
+        used = calc_used(offset, oldest_offset);
+        free_space = (log_end - log_start) - used;
+        phosphor::logging::log<phosphor::logging::level::INFO>("write_logs_to_flash Rolling over now...");
+    }
+
+    if (free_space < data_size) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("write_logs_to_flash Not enough space even after rolling");
         close(fd);
         return;
     }
 
-    // Calculate blocks to erase
-    off_t start_block = start_offset & ~(erase_size - 1);
-    off_t end_block = end_offset & ~(erase_size - 1);
+    // Build write ranges
+    std::vector<std::pair<off_t, size_t>> wranges;
+    if (offset + data_size <= log_end) {
+        wranges.emplace_back(offset, data_size);
+    } else {
+        size_t first = log_end - offset;
+        if (first > 0) wranges.emplace_back(offset, first);
+        size_t second = data_size - first;
+        if (second > 0) wranges.emplace_back(log_start, second);
+    }
 
-    for (off_t block = start_block; block <= end_block; block += erase_size) {
-        // Read the block to check its contents
-        std::vector<uint8_t> buffer(erase_size);
-        lseek(fd, block, SEEK_SET);
-        ssize_t read_bytes = read(fd, buffer.data(), erase_size);
-        if (read_bytes != static_cast<ssize_t>(erase_size)) {
-            boot_dbgfile << "Failed to read block at " << block << ": " << strerror(errno) << std::endl;
-            close(fd);
-            return;
-        }
+    if (wranges.size() > 1) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("write_logs_to_flash WRAP WRITE");
+    }
 
-        // Check if the block has any characters other than 0xFF (i.e., has data)
-        bool has_other_than_ff = false;
-        for (const auto& b : buffer) {
-            if (b != 0xFF) {
-                has_other_than_ff = true;
-                break;
+    // Prepare blocks in the write ranges (erase only if all-FF)
+
+    for (auto& wr : wranges) {
+        off_t wstart = wr.first;
+        off_t wend   = wstart + wr.second - 1;
+        off_t sb = wstart & ~(erase_size - 1);
+        off_t eb = wend   & ~(erase_size - 1);
+
+        bool force_erase = (wstart == 0);
+
+        for (off_t b = sb; b <= eb; b += erase_size) {
+            std::vector<uint8_t> buf(erase_size);
+            lseek(fd, b, SEEK_SET);
+            if (read(fd, buf.data(), erase_size) != static_cast<ssize_t>(erase_size)) continue;
+
+            bool has_data = false;
+            for (auto v : buf) if (v != 0xFF) { has_data = true; break; }
+            
+            if (!force_erase && has_data) {
+                continue;                       // extending current block – preserve old data
             }
-        }
 
-        // Do not erase if it has characters other than 0xFF
-        if (has_other_than_ff) {
-            continue;
-        }
-
-        erase_info_t erase;
-        erase.start = block;
-        erase.length = erase_size;
-
-        if (ioctl(fd, MEMUNLOCK, &erase) != 0) {
-            boot_dbgfile << "Unlock failed for block at " << block << ": " << strerror(errno) << std::endl;
-            if (errno != ENOTSUP) {
-                close(fd);
-                return;
+            erase_info_t er { .start = b, .length = erase_size };
+            ioctl(fd, MEMUNLOCK, &er);
+            if (ioctl(fd, MEMERASE, &er) != 0) {
+                boot_dbgfile << "Erase failed for block " << b << "\n";
+                phosphor::logging::log<phosphor::logging::level::INFO>(("write_logs_to_flash Erase failed for block " + std::to_string(b)).c_str());
             }
-        }
-
-        if (ioctl(fd, MEMERASE, &erase) != 0) {
-            boot_dbgfile << "Erase failed for block at " << block << ": " << strerror(errno) << std::endl;
-            close(fd);
-            return;
         }
     }
 
-    lseek(fd, start_offset, SEEK_SET);
-    ssize_t written = write(fd, newlog_string.data(), data_size);
-    if (written < 0) {
-        boot_dbgfile << "Write failed: " << strerror(errno) << " (errno: " << errno << ")" << std::endl;
-    } else if (written != static_cast<ssize_t>(data_size)) {
-        boot_dbgfile << "Write incomplete: wrote " << written << " of " << data_size << " bytes" << std::endl;
-    } else {
-        update_last_append_offset(start_offset + data_size);
+    bool all_writes_ok = true;
+
+    const char* data_ptr = newlog_string.data();
+    size_t data_off = 0;
+
+    for (auto& wr : wranges) {
+        lseek(fd, wr.first, SEEK_SET);
+        ssize_t written = write(fd, data_ptr + data_off, wr.second);
+        if (written != static_cast<ssize_t>(wr.second)) {
+            all_writes_ok = false;
+        }
+        data_off += wr.second;
+    }
+
+    if (all_writes_ok && !wranges.empty()) {
+        auto& last = wranges.back();
+        offset = last.first + last.second;
+        if (offset >= static_cast<off_t>(mtd_info.size)) offset = 0;
+    } else if (!all_writes_ok) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("write_logs_to_flash NOT advancing offset because write was incomplete");
     }
 
     close(fd);
-    newlog_string = "";
+    if (all_writes_ok) newlog_string = "";
+
 }
 
-void Manager::update_last_append_offset(off_t new_offset) {
+void Manager::update_last_append_offset(off_t new_offset) 
+{
     offset = new_offset;
 }
 
-void Manager::trim_log() {
+void Manager::trim_log() 
+{
 
     // boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: trimming log now..." << std::endl;
 
@@ -371,12 +900,13 @@ void Manager::trim_log() {
         system_logs.close();
         system_logs.open("system_logs.log", std::ios::app);
     } catch (const fs::filesystem_error& e) {
-        boot_dbgfile << "Filesystem error: " << e.what() << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("trim_log Filesystem error");
     }
 
 }
 
-void Manager::write_heartbeat() {
+void Manager::write_heartbeat() 
+{
     update_readings(1);
     std::string ADClog;
     ADClog = "System heartbeat... ";
@@ -389,110 +919,88 @@ void Manager::write_heartbeat() {
     write_log_to_file(ADClog);
 }
 
-Manager::Manager()
+void Manager::calculate_cs() 
 {
-    temp_service_status = false;
-    voltage_service_status = false;
-    fan_controller_service_status = false;
-    mandatory_sensor_service_status = false;
-    gpio_service_status = false;
-    ipmi_service_status = false;
-
-    init_system_logs();
-
-    write_log_to_file("-----------------------------------------------------------------------------------------------------------------------");
-    write_log_to_file("CHASSIS MANAGER BOOTUP");
-    write_log_to_file("BOOTUP LOGS BEGIN HERE");
-    write_log_to_file("FPGA has finished boot. Kernel booting has begun. These logs are for the BOOT SEQUENCE AND MANAGER application.");
-    write_log_to_file("This application manages the System Reset and PS enable signals.");
-    write_log_to_file("Once voltages are nominal and services are active, the system reset is released, allowing the cards to boot.");
-    write_log_to_file("-----------------------------------------------------------------------------------------------------------------------");
-
-    limitJson = readJson("/usr/share/thresholds/thresholds.json");
-
-    ADCpaths ADCpaths;
-    
-    ADCs.push_back(std::make_unique<ADC_element>("12V_Rail", ADCpaths.V12path, 12.0));
-    ADCs.push_back(std::make_unique<ADC_element>("3_3V_Rail", ADCpaths.V3_3path, 3.3));
-    ADCs.push_back(std::make_unique<ADC_element>("5V_Rail", ADCpaths.V5path, 5.0));
-    ADCs.push_back(std::make_unique<ADC_element>("3_3auxV_Rail", ADCpaths.V3_3Auxpath, 3.3));
-    ADCs.push_back(std::make_unique<ADC_element>("12pauxV_Rail", ADCpaths.Vp12Auxpath, 12.0));
-    ADCs.push_back(std::make_unique<ADC_element>("12nauxV_Rail", ADCpaths.Vn12Auxpath, -12.0));
-
-    calculate_cs();
-
-    sysreset.input=false;
-    sysreset.chip=1;
-    sysreset.line=0;
-    sysreset.status=0;
-    sysreset.dbusflag=false;
-    sysreset.name="sysreset";
-
-    ps_enable.input=false;
-    ps_enable.chip=2;
-    ps_enable.line=3;
-    ps_enable.status=0;
-    ps_enable.dbusflag=false;
-    ps_enable.name="psenable";
-
-    switch_gpio.input=true;
-    switch_gpio.chip=0;
-    switch_gpio.line=6;
-    switch_gpio.status=0;
-    switch_gpio.name="switch_gpio";
-
-    alarm_gpio.input=false;
-    alarm_gpio.chip=0;
-    alarm_gpio.line=11;
-    alarm_gpio.status=0;
-    alarm_gpio.name="alarm_gpio";
-}
-
-Manager::~Manager()
-{
-    ;
-}
-
-void Manager::calculate_cs() {
     for (const auto& ADC : ADCs) {
         ADC->scale_coeff = (ADC->V_target / 2047);
     }
 }
 
-bool Manager::wait_for_switch() {
+bool Manager::getfancontrol()
+{
+    return fancontrol;
+}
+
+int Manager::find_chip_by_label(const std::string& want)
+{
+    for (auto& c : gpiod::make_chip_iter())
+    {
+        if (c.label() != want)
+            continue;
+        
+        std::string name = c.name();
+        char c_chip = name.back();
+        std::string s_chip(1, c_chip);
+        int chip = stoi(s_chip);
+        return chip;
+
+    }
+    return -1;
+}
+
+bool Manager::wait_for_switch() 
+{
     watch_services();
-    try {
-        // Open the GPIO chip
-        gpiod::chip chip("gpiochip" + std::to_string(switch_gpio.chip));
-
-        // Get the line
-        gpiod::line line = chip.get_line(switch_gpio.line);
-        
-        // Request line as input
-        line.request({"readgpio", gpiod::line_request::DIRECTION_INPUT, 0});
-        
-        // Read the current value
-        int value = line.get_value();
-        
-        // Update status
-        switch_gpio.status = value;
-
-        if (value == 1) {
-            boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: switch was turned on" << std::endl;
+    if (switch_gpio.chip != -1) {
+        try {
+            phosphor::logging::log<phosphor::logging::level::INFO>("wait_for_switch checking chip...");
+            // Open the GPIO chip
+            gpiod::chip chip("gpiochip" + std::to_string(switch_gpio.chip));
+    
+            // Get the line
+            gpiod::line line = chip.get_line(switch_gpio.line);
+            
+            // Request line as input
+            line.request({"readgpio", gpiod::line_request::DIRECTION_INPUT, 0});
+            
+            // Read the current value
+            int value = line.get_value();
+            
+            // Update status
+            switch_gpio.status = value;
+    
+            phosphor::logging::log<phosphor::logging::level::INFO>(("wait_for_switch chip=" + std::to_string(switch_gpio.chip) + " line=" + std::to_string(switch_gpio.line) + " value=" + std::to_string(value)).c_str());
             line.release();
-            write_log_to_file("Front Panel switch was turned on...");
-            return true;
+            
+            if (configJson["onSwitchGPIO"]["activehigh"].get<bool>()) {
+                if (value == 1) {
+                    phosphor::logging::log<phosphor::logging::level::INFO>("wait_for_switch switch was turned on");
+                    line.release();
+                    write_log_to_file("Front Panel switch was turned on...");
+                    return true;
+                }
+            } else {
+                if (value == 0) {
+                    phosphor::logging::log<phosphor::logging::level::INFO>("wait_for_switch switch was turned on");
+                    line.release();
+                    write_log_to_file("Front Panel switch was turned on...");
+                    return true;
+                }
+            }
+    
+            return false;
+        } catch (const std::exception& e) {
+            phosphor::logging::log<phosphor::logging::level::INFO>("wait_for_switch Error in GPIO operations");
+            return false;
         }
-
-        line.release();
-        return false;
-    } catch (const std::exception& e) {
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: Error in GPIO operations: " << e.what() << std::endl;
-        return false;
+    } else {
+        write_log_to_file("Front Panel switch GPIO is not present, continuing with power-on sequence...");
+        return true;
     }
 }
 
-bool Manager::set_alarm_gpio() {
+bool Manager::set_alarm_gpio() 
+{
     try {
         // Open the GPIO chip
         gpiod::chip chip("gpiochip" + std::to_string(switch_gpio.chip));
@@ -500,60 +1008,66 @@ bool Manager::set_alarm_gpio() {
         // Get the line
         gpiod::line line = chip.get_line(switch_gpio.line);
     
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: setting alarm" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_alarm_gpio setting alarm");
         // Request line as output
         line.request({"setgpio", gpiod::line_request::DIRECTION_OUTPUT, 0}, 1);
         switch_gpio.status=1;
         write_log_to_file("Setting Alarm gpio pin");
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: exiting set alarm" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_alarm_gpio exiting set alarm");
         line.release();
 
         return true;
     } catch (const std::exception& e) {
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: Error in GPIO operations: " << e.what() << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_alarm_gpio Error in GPIO operations");
         return false;
     }
 }
 
-bool Manager::update_readings(int num) {
+bool Manager::update_readings(int num) 
+{
 
     bool bootflag = false;
 
     for (const auto& ADC : ADCs) {
-        // boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: reading value: ";
-        ADC->raw_reading = std::stoi(readFile(ADC->path));
-        ADC->V_current = ADC->scale_coeff * ADC->raw_reading;
-        double lowthresh = limitJson[ADC->name]["critmin"];
-        double highthresh = limitJson[ADC->name]["critmax"];
-        if (std::abs(ADC->V_current) > std::abs(lowthresh) && std::abs(ADC->V_current) < std::abs(highthresh)) {
-            // boot_dbgfile << "[" << currentTimestamp() << "] " << ADC->name << " is safe at reading " << ADC->V_current << std::endl;
-            ADC->safe = true;
-        } else {
-            boot_dbgfile << "[" << currentTimestamp() << "] " << ADC->name << " is not safe at reading " << ADC->V_current << std::endl;
-            if (num % 15 == 0) {
-                write_log_to_file("Voltage monitoring: " + ADC->name + " is unsafe at reading " + std::to_string(ADC->V_current));
+        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: ADC path: " << ADC->path << std::endl;
+        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: reading value: " << readFile(ADC->path) << std::endl;
+        if (ADC->present) {
+            ADC->raw_reading = std::stoi(readFile(ADC->path));
+            ADC->V_current = ADC->scale_coeff * ADC->raw_reading;
+            double lowthresh = configJson["adcsensors"][directory.c_str()][ADC->name]["thresholds"]["critmin"];
+            double highthresh = configJson["adcsensors"][directory.c_str()][ADC->name]["thresholds"]["critmax"];
+            if (std::abs(ADC->V_current) > std::abs(lowthresh) && std::abs(ADC->V_current) < std::abs(highthresh)) {
+                // boot_dbgfile << "[" << currentTimestamp() << "] " << ADC->name << " is safe at reading " << ADC->V_current << std::endl;
+                ADC->safe = true;
+            } else {
+                phosphor::logging::log<phosphor::logging::level::INFO>(("update_readings " + ADC->name + " is not safe at reading " + std::to_string(ADC->V_current)).c_str());
+                if (num % 15 == 0) {
+                    write_log_to_file("Voltage monitoring: " + ADC->name + " is unsafe at reading " + std::to_string(ADC->V_current));
+                }
+                ADC->safe = false;
+                bootflag = false;
+                return bootflag;
             }
-            ADC->safe = false;
-            bootflag = false;
-            return bootflag;
         }
     }
 
     for (const auto& ADC : ADCs) {
-        if (ADC->safe == false) {
-            boot_dbgfile << "[" << currentTimestamp() << "] " << ADC->name << " is not safe at reading " << ADC->V_current << std::endl;
-            bootflag = false;
-            return bootflag;
+        if (ADC->present) {
+            if (ADC->safe == false) {
+                phosphor::logging::log<phosphor::logging::level::INFO>(("update_readings " + ADC->name + " is not safe at reading " + std::to_string(ADC->V_current)).c_str());
+                bootflag = false;
+                return bootflag;
+            }
         }
     }
 
     bootflag = true;
-    // boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: bootflag is true" << std::endl;
     
     return bootflag;
 }
 
-ADC_element* Manager::getSensorByName(const std::string& name) {
+ADC_element* Manager::getSensorByName(const std::string& name) 
+{
     for (const auto& ADC : ADCs) {
         if (ADC->name == name) {
             return ADC.get();
@@ -562,7 +1076,8 @@ ADC_element* Manager::getSensorByName(const std::string& name) {
     return nullptr;
 }
 
-bool Manager::set_ps() {
+bool Manager::set_ps() 
+{
     try {
         // Open the GPIO chip
         gpiod::chip chip("gpiochip" + std::to_string(ps_enable.chip));
@@ -570,24 +1085,83 @@ bool Manager::set_ps() {
         // Get the line
         gpiod::line line = chip.get_line(ps_enable.line);
     
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: setting ps" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_ps setting ps");
         // Request line as output
         line.request({"setgpio", gpiod::line_request::DIRECTION_OUTPUT, 0}, 1);
         ps_enable.status=1;
         write_log_to_file("Setting Power Supply Enable pin");
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: exiting set ps" << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_ps exiting set ps");
         line.release();
 
         ps_enable.dbusflag=true;
 
         return true;
     } catch (const std::exception& e) {
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: Error in GPIO operations: " << e.what() << std::endl;
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_ps Error in GPIO operations");
         return false;
     }
 }
 
-bool Manager::unset_ps() {
+void Manager::set_power_state()
+{
+    auto bus = sdbusplus::bus::new_default();
+    phosphor::interface::util::setProperty<std::string>(bus, "/xyz/openbmc_project/state/chassis0", "xyz.openbmc_project.State.Chassis", "CurrentPowerState", "xyz.openbmc_project.State.Chassis.PowerState.On");
+
+}
+
+bool Manager::set_ps_inh1() 
+{
+    try {
+        // Open the GPIO chip
+        gpiod::chip chip("gpiochip" + std::to_string(ps_inhibit1.chip));
+        
+        // Get the line
+        gpiod::line line = chip.get_line(ps_inhibit1.line);
+    
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_ps_inh1 setting ps inh1");
+        // Request line as output
+        line.request({"setgpio", gpiod::line_request::DIRECTION_OUTPUT, 0}, 1);
+        ps_inhibit1.status=1;
+        write_log_to_file("Setting Power Supply inhibit 1 pin");
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_ps_inh1 exiting set ps inh1");
+        line.release();
+
+        ps_inhibit1.dbusflag=true;
+
+        return true;
+    } catch (const std::exception& e) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_ps_inh1 Error in GPIO operations");
+        return false;
+    }
+}
+
+bool Manager::set_ps_inh2() 
+{
+    try {
+        // Open the GPIO chip
+        gpiod::chip chip("gpiochip" + std::to_string(ps_inhibit2.chip));
+        
+        // Get the line
+        gpiod::line line = chip.get_line(ps_inhibit2.line);
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_ps_inh2 setting ps inh2");
+        // Request line as output
+        line.request({"setgpio", gpiod::line_request::DIRECTION_OUTPUT, 0}, 1);
+        ps_inhibit2.status=1;
+        write_log_to_file("Setting Power Supply inhibit 2 pin");
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_ps_inh2 exiting set ps inh2");
+        line.release();
+
+        ps_inhibit2.dbusflag=true;
+
+        return true;
+    } catch (const std::exception& e) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("set_ps_inh2 Error in GPIO operations");
+        return false;
+    }
+}
+
+bool Manager::unset_ps() 
+{
     try {
         // Open the GPIO chip
         gpiod::chip chip("gpiochip" + std::to_string(ps_enable.chip));
@@ -595,29 +1169,28 @@ bool Manager::unset_ps() {
         // Get the line
         gpiod::line line = chip.get_line(ps_enable.line);
     
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: setting ps" << std::endl;
         // Request line as output
         line.request({"setgpio", gpiod::line_request::DIRECTION_OUTPUT, 0}, 0);
         ps_enable.status=0;
         write_log_to_file("Unsetting Power Supply Enable pin");
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: exiting set ps" << std::endl;
         line.release();
 
-        ps_enable.dbusflag=false;
+        ps_enable.dbusflag=true;
 
         return true;
     } catch (const std::exception& e) {
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: Error in GPIO operations: " << e.what() << std::endl;
         return false;
     }
 }
 
-bool Manager::get_fan_controller_status() {
+bool Manager::get_fan_controller_status() 
+{
     watch_services();
     return fan_controller_service_status;
 }
 
-bool Manager::set_sr() {
+bool Manager::unset_sr() 
+{
     write_log_to_file("Voltage monitoring: voltages within range, driving system reset pin to begin chassis boot");
     try {
         // Open the GPIO chip
@@ -625,49 +1198,108 @@ bool Manager::set_sr() {
         
         // Get the line
         gpiod::line line = chip.get_line(sysreset.line);
-    
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: setting sysreset, adjust with better hardware" << std::endl;
+
         // Request line as output
-        line.request({"setgpio", gpiod::line_request::DIRECTION_OUTPUT, 0}, 0);
+        if (resetLow) {
+            line.request({"setgpio", gpiod::line_request::DIRECTION_OUTPUT, 0}, 1);
+        } else {
+            line.request({"setgpio", gpiod::line_request::DIRECTION_OUTPUT, 0}, 0);
+        }
+        
         sysreset.status=1;
-        write_log_to_file("Setting System Reset pin");
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: exiting set sysreset" << std::endl;
+        write_log_to_file("Setting Chassis-wide System Reset to boot cards");
         line.release();
+
+        srstatus_file.seekp(0);
+        srstatus_file << 1 << std::endl;
+        srstatus_file.flush();
 
         sysreset.dbusflag=true;
 
         return true;
     } catch (const std::exception& e) {
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: Error in GPIO operations: " << e.what() << std::endl;
         return false;
     }
 }
 
-bool Manager::check_temp_service(){
+bool Manager::set_sr() 
+{
+    write_log_to_file("Holding reset until chassis is safe to boot.");
+    try {
+        // Open the GPIO chip
+        gpiod::chip chip("gpiochip" + std::to_string(sysreset.chip));
+        
+        // Get the line
+        gpiod::line line = chip.get_line(sysreset.line);
+
+        // Request line as output
+        if (resetLow) {
+            line.request({"setgpio", gpiod::line_request::DIRECTION_OUTPUT, 0}, 0);
+        } else {
+            line.request({"setgpio", gpiod::line_request::DIRECTION_OUTPUT, 0}, 1);
+        }
+        
+        sysreset.status=1;
+        line.release();
+
+        srstatus_file.seekp(0);
+        srstatus_file << 0 << std::endl;
+        srstatus_file.flush();
+
+        sysreset.dbusflag=true;
+
+        return true;
+    } catch (const std::exception& e) {
+        return false;
+    }
+}
+
+
+void Manager::sim_sr() 
+{
+    srstatus_file.seekp(0);
+    srstatus_file << 1 << std::endl;
+    srstatus_file.flush();
+    sysreset.dbusflag=true;
+}
+
+bool Manager::check_temp_service()
+{
     return isServiceActive("LCR_temp_sensors.service");
 }
 
-bool Manager::check_voltage_service(){
+bool Manager::check_voltage_service()
+{
     return isServiceActive("LCR_ADC_sensors.service");
 }
 
-bool Manager::check_fan_controller_service(){
+bool Manager::check_fan_controller_service()
+{
     return isServiceActive("LCR_fan_controller.service");
 }
 
-bool Manager::check_mandatory_sensor_service(){
+bool Manager::check_fan_monitor_service()
+{
+    return isServiceActive("LCR_fan_monitor.service");
+}
+
+bool Manager::check_mandatory_sensor_service()
+{
     return isServiceActive("LCR_Mandatory_Sensors.service");
 }
 
-bool Manager::check_gpio_service(){
+bool Manager::check_gpio_service()
+{
     return isServiceActive("LCR_GPIO_Mon.service");    
 }
 
-bool Manager::check_ipmi_host_service(){
+bool Manager::check_ipmi_host_service()
+{
     return isServiceActive("phosphor-ipmi-host.service");
 }
 
-void Manager::log_servicechange(std::string* log, bool status) {
+void Manager::log_servicechange(std::string* log, bool status) 
+{
     if (status == false) {
         *log += " to OFF";
     } else {
@@ -675,11 +1307,12 @@ void Manager::log_servicechange(std::string* log, bool status) {
     }
 }
 
-void Manager::watch_services() {
-    // boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: watching service statuses" << std::endl;
+void Manager::watch_services() 
+{
     bool temp_temp_status = check_temp_service();
     bool temp_voltage_status = check_voltage_service();
     bool temp_fan_controller_status = check_fan_controller_service();
+    bool temp_fan_monitor_status = check_fan_monitor_service();
     bool temp_mandatory_sensor_status = check_mandatory_sensor_service();
     bool temp_gpio_status = check_gpio_service();
     bool temp_ipmi_status = check_ipmi_host_service();
@@ -707,6 +1340,13 @@ void Manager::watch_services() {
         fan_controller_service_status = temp_fan_controller_status;
         write_log_to_file(log);
     }
+    if (temp_fan_monitor_status != fan_monitor_service_status) {
+        std::string log;
+        log += "Fan Monitor service status changed";
+        log_servicechange(&log, temp_fan_monitor_status);
+        fan_monitor_service_status = temp_fan_monitor_status;
+        write_log_to_file(log);
+    }
     if (temp_mandatory_sensor_status != mandatory_sensor_service_status) {
         std::string log;
         log += "Mandatory Sensors service status changed";
@@ -728,10 +1368,10 @@ void Manager::watch_services() {
         ipmi_service_status = temp_ipmi_status;
         write_log_to_file(log);
     }
-
 }
 
-void Manager::watch_gpios() {
+void Manager::watch_gpios() 
+{
     std::string interface = "xyz.openbmc_project.Sensor.Value";
     std::string property = "Value";
     while(true){
@@ -740,21 +1380,40 @@ void Manager::watch_gpios() {
             auto bus = sdbusplus::bus::new_default();
 
             int ps_value = ps_enable.status;
+            int inh1_value = ps_inhibit1.status;
+            int inh2_value = ps_inhibit2.status;
             int sr_value = sysreset.status;
-    
+
             std::string ps_name = ps_enable.name;
             std::string ps_path = "/xyz/openbmc_project/gpio/" + ps_name;
-    
+
+            std::string psinh1_name = ps_inhibit1.name;
+            std::string psinh1_path = "/xyz/openbmc_project/gpio/" + psinh1_name;
+
+            std::string psinh2_name = ps_inhibit2.name;
+            std::string psinh2_path = "/xyz/openbmc_project/gpio/" + psinh2_name;
+
             std::string sr_name = sysreset.name;
             std::string sr_path = "/xyz/openbmc_project/gpio/" + sr_name;
-    
+
             try {
                 if (ps_enable.dbusflag){
-                    phosphor::interface::util::setProperty<int>(bus, ps_path, interface, property, std::move(ps_value));
+                    phosphor::logging::log<phosphor::logging::level::INFO>(("watch_gpios setting ps_enable to " + std::to_string(ps_value)).c_str());
+                    phosphor::interface::util::setProperty<int>(bus, ps_path,     interface, property, std::move(ps_value));
                     ps_enable.dbusflag=false;
                 }
+                if (ps_inhibit1.dbusflag){
+                    phosphor::logging::log<phosphor::logging::level::INFO>(("watch_gpios setting ps_inhibit1 to " + std::to_string(inh1_value)).c_str());
+                    phosphor::interface::util::setProperty<int>(bus, psinh1_path, interface, property, std::move(inh1_value));
+                    ps_inhibit1.dbusflag=false;
+                }
+                if (ps_inhibit2.dbusflag){
+                    phosphor::logging::log<phosphor::logging::level::INFO>(("watch_gpios setting ps_inhibit2 to " + std::to_string(inh2_value)).c_str());
+                    phosphor::interface::util::setProperty<int>(bus, psinh2_path, interface, property, std::move(inh2_value));
+                    ps_inhibit2.dbusflag=false;
+                }
             } catch (const std::exception& e) {
-                boot_dbgfile << "[" << currentTimestamp() << "] " << "Failed to set property for " << ps_name << ": " << e.what() << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>(("watch_gpios Failed to set property for " + ps_name).c_str());
             }
             
             try {
@@ -763,18 +1422,18 @@ void Manager::watch_gpios() {
                     sysreset.dbusflag = false;
                 }
             } catch (const std::exception& e) {
-                boot_dbgfile << "[" << currentTimestamp() << "] " << "Failed to set property for " << sr_name << ": " << e.what() << std::endl;
+                phosphor::logging::log<phosphor::logging::level::INFO>(("watch_gpios Failed to set property for " + sr_name).c_str());
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
 }
 
-void Manager::watch_alarms() {
+void Manager::watch_alarms() 
+{
     
-    boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: watching alarms..." << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("watch_alarms waiting for ipmi service");
     while(ipmi_service_status == false) {
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: ipmi host is not yet enabled..." << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         watch_services();
     }
@@ -790,6 +1449,18 @@ void Manager::watch_alarms() {
     std::string pwm_stub = "/xyz/openbmc_project/sensors/fan_pwm";
     std::string tach_stub = "/xyz/openbmc_project/sensors/fan_tach";
 
+    try {
+        temp_paths = phosphor::interface::util::getSubTreePathsRaw(bus, temperature_stub, threshold_interface, 0);
+    } catch (...) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("watch_alarms no temperature paths");
+    }
+    
+    try {
+        voltage_paths = phosphor::interface::util::getSubTreePathsRaw(bus, voltage_stub, threshold_interface, 0);
+    } catch (...) {
+        phosphor::logging::log<phosphor::logging::level::INFO>("watch_alarms no voltage paths");
+    }
+    
     bool temp_alarm;
     bool voltage_alarm;
     bool fan_alarm;
@@ -800,11 +1471,9 @@ void Manager::watch_alarms() {
     std::string voltage_name;
     while(alarms == false) {
         watch_services();
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: checking temperature alarms" << std::endl;
         temp_alarm = false;
-        try {
+        if (temp_paths.size() > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            auto temp_paths = phosphor::interface::util::getSubTreePathsRaw(bus, temperature_stub, threshold_interface, 0);
             for (auto& path : temp_paths) {
                 try {
                     bool critical_low = phosphor::interface::util::getProperty<bool>(bus, path, threshold_interface, std::string("CriticalAlarmLow"));
@@ -816,19 +1485,13 @@ void Manager::watch_alarms() {
                         break;
                     }
                 } catch (const std::exception& e) {
-                    boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: Error getting temperature alarm properties for " << path << ": " << e.what() << std::endl;
                     // Continue to next path, treating this sensor as no alarm
                 }
-            }
-        } catch (const std::exception& e) {
-            boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: Error getting temperature subtree paths: " << e.what() << std::endl;
-            // Treat as no alarm if subtree fetch fails
+            }// Treat as no alarm if subtree fetch fails
         }
         
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: checking voltage alarms" << std::endl;
         voltage_alarm = false;
-        try {
-            auto voltage_paths = phosphor::interface::util::getSubTreePathsRaw(bus, voltage_stub, threshold_interface, 0);
+        if (voltage_paths.size() > 0) {
             for (auto& path : voltage_paths) {
                 try {
                     bool critical_low = phosphor::interface::util::getProperty<bool>(bus, path, threshold_interface, std::string("CriticalAlarmLow"));
@@ -840,18 +1503,11 @@ void Manager::watch_alarms() {
                         break;
                     }
                 } catch (const std::exception& e) {
-                    // boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: Error getting voltage alarm properties for " << path << ": " << e.what() << std::endl;
                     // Continue to next path, treating this sensor as no alarm
                 }
-            }
-        } catch (const std::exception& e) {
-            boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: Error getting voltage subtree paths: " << e.what() << std::endl;
-            // Treat as no alarm if subtree fetch fails
+            }// Treat as no alarm if subtree fetch fails
         }
         alarms = (temp_alarm || voltage_alarm) ? true : false;
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: temperature alarm: " << (temp_alarm ? "ON" : "OFF") << std::endl;
-        boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: voltage alarm: " << (voltage_alarm ? "ON" : "OFF") << std::endl;
-
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     }
@@ -865,6 +1521,6 @@ void Manager::watch_alarms() {
     unset_ps();
     set_alarm_gpio();
     write_log_to_file("Alarm is set, reset the chassis.");
-    boot_dbgfile << "[" << currentTimestamp() << "] " << "LCR:BOOT: alarms are high" << std::endl;
+    phosphor::logging::log<phosphor::logging::level::INFO>("watch_alarms ALARMS ARE HIGH");
     
 }

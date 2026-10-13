@@ -13,6 +13,7 @@ FRUHealthState::FRUHealthState(std::shared_ptr<sdbusplus::asio::connection> conn
     obj_server.add_manager("/xyz/openbmc_project/sensors");
     phosphor::logging::log<phosphor::logging::level::INFO>("FRUHealthState initialization");
     sensor_path = "/xyz/openbmc_project/sensors/mandatoryNumbers/VSO_FRU_HEALTH";
+    byte3 = static_cast<double>(1 << 5);
 }
 
 FRUHealthState::~FRUHealthState() {
@@ -44,12 +45,22 @@ void FRUHealthState::expose_sensor() {
         sdbusplus::vtable::property_::emits_change,
         [this](const auto&) { return current_value; }
     );
+    value_iface->register_property_r<double>(
+        "Byte3",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const auto&) { return byte3; }
+    );
 
+    value_iface->register_property_r<double>(
+        "Byte4",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const auto&) { return byte4; }
+    );
     // Register other required properties for Sensor.Value with defaults
     value_iface->register_property_r<int64_t>(
         "MaxValue",
         sdbusplus::vtable::property_::const_,
-        [](const auto&) { return 1; }
+        [](const auto&) { return 64; }
     );
     value_iface->register_property_r<int64_t>(
         "MinValue",
@@ -90,8 +101,8 @@ void FRUHealthState::async_update_interface() {
     // phosphor::logging::log<phosphor::logging::level::INFO>("FRUHealthState async_update_interface enter");
     async_get_all_alarms_status([this](uint8_t val) {
         double new_val = static_cast<double>(val);
-        if (new_val != this->current_value) {
-            this->current_value = new_val;
+        if (new_val != this->byte4) {
+            this->byte4 = new_val;
             if (this->value_iface) {
                 this->emit_value_changed();
             }

@@ -813,20 +813,44 @@ ipmi::RspType<> ipmiSetSensorReading(ipmi::Context::ptr ctx,
     return ipmi::responseResponseError();
 }
 
-ipmi::RspType<uint8_t, uint8_t, uint8_t, std::optional<uint8_t>> handleMandatorySensor(uint8_t sensnum)
+ipmi::RspType<uint8_t, uint8_t, uint8_t, std::optional<uint8_t>> handleMandatorySensor(
+    ipmi::Context::ptr ctx, uint8_t sensnum,
+    std::string& connection, std::string& path)
 {
-    phosphor::logging::log<phosphor::logging::level::INFO>(("handleMandatorySensor: enter for sensnum " + std::to_string(sensnum)).c_str());
-    return ipmi::responseSuccess(0x00, 0x00, 0x00, std::nullopt);
+    DbusInterfaceMap sensorMap;
+    if (!getSensorMap(ctx, connection, path, sensorMap))
+    {
+        return ipmi::responseResponseError();
+    }
+    auto sensorObject = sensorMap.find(sensor::sensorInterface);
+
+    if (sensorObject == sensorMap.end() ||
+        sensorObject->second.find("Value") == sensorObject->second.end())
+    {
+        return ipmi::responseResponseError();
+    }
+    auto& valueVariant = sensorObject->second["Value"];
+    double reading = std::visit(VariantToDoubleVisitor(), valueVariant);
+    uint8_t byte2_ret = static_cast<uint8_t>(static_cast<int>(reading));
+
+    auto& byte3Variant = sensorObject->second["Byte3"];
+    double byte3reading = std::visit(VariantToDoubleVisitor(), byte3Variant);
+    uint8_t byte3_ret = static_cast<uint8_t>(static_cast<int>(byte3reading));
+    
+    auto& byte4Variant = sensorObject->second["Byte4"];
+    double byte4reading = std::visit(VariantToDoubleVisitor(), byte4Variant);
+    uint8_t byte4_ret = static_cast<uint8_t>(static_cast<int>(byte4reading));
+    phosphor::logging::log<phosphor::logging::level::INFO>(("handleMandatorySensor: at sensor number " + std::to_string(sensnum) + ", reading " + std::to_string(reading)).c_str());
+    phosphor::logging::log<phosphor::logging::level::INFO>(("handleMandatorySensor: byte3reading " + std::to_string(byte3reading)).c_str());
+    phosphor::logging::log<phosphor::logging::level::INFO>(("handleMandatorySensor: byte4reading " + std::to_string(byte4reading)).c_str());
+
+    return ipmi::responseSuccess(byte2_ret, byte3_ret, byte4_ret, std::nullopt);
 }
 
 ipmi::RspType<uint8_t, uint8_t, uint8_t, std::optional<uint8_t>>
     ipmiSenGetSensorReading(ipmi::Context::ptr ctx, uint8_t sensnum)
 {
     phosphor::logging::log<phosphor::logging::level::INFO>(("ipmiSenGetSensorReading: enter for sensnum " + std::to_string(sensnum)).c_str());
-
-    if (sensnum < 8) { 
-        return handleMandatorySensor(sensnum);
-    }
 
     std::string connection;
     std::string path;
@@ -840,6 +864,10 @@ ipmi::RspType<uint8_t, uint8_t, uint8_t, std::optional<uint8_t>>
     if (status)
     {
         return ipmi::response(status);
+    }
+
+    if (sensnum < 8) { 
+        return handleMandatorySensor(ctx, sensnum, connection, path);
     }
 
 #ifdef FEATURE_HYBRID_SENSORS

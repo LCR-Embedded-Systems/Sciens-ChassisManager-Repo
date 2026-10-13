@@ -34,7 +34,10 @@ inherit systemd
 
 EXTRA_OEMESON:append = " -Dtests=disabled"
 
+do_install:append() {
+    rm -f ${D}${systemd_unitdir}/network/60-phosphor-networkd-default.network
+}
+
 FILES:${PN} += "${datadir}/dbus-1/system.d"
-FILES:${PN} += "${systemd_unitdir}/network/60-phosphor-networkd-default.network"
 
 UBOOT_ENV_RDEPENDS = "${@d.getVar('PREFERRED_PROVIDER_u-boot-fw-utils', True) or 'u-boot-fw-utils'}"

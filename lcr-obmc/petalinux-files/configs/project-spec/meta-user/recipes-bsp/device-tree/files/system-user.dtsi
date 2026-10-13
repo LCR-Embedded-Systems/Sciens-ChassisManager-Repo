@@ -85,11 +85,33 @@
         #size-cells = <0>;
     };
 
-    gpio_expander: max7313@29 {
+    gpio_expander: max7313@19 {
         compatible = "maxim,max7313";
         reg = <0x19>;
         gpio-controller;
         #gpio-cells = <2>;
+    };
+
+    gpio_expander2: max7313@28 {
+        compatible = "maxim,max7313";
+        reg = <0x28>;
+        gpio-controller;
+        #gpio-cells = <2>;
+    };
+    gpio_expander3: max7313@20 {
+        compatible = "maxim,max7313";
+        reg = <0x20>;
+        gpio-controller;
+        #gpio-cells = <2>;
+    };
+    gpio_expander_pcal: pcal6408@40 {
+        compatible = "nxp,pcal6408";
+        reg = <0x40>;
+        gpio-controller;
+        #gpio-cells = <2>;
+        gpio-line-names = "P0", "P1", "P2", "P3",
+                        "P4", "P5", "P6", "P7";
+
     };
     adc@2f {
         compatible = "adi,ad7291";
@@ -98,16 +120,18 @@
         #size-cells = <0>;
     };
     eeprom_1: eeprom@50 {
-        compatible = "st,m24m02", "atmel,24c2048";
+        compatible = "st,m24m02-dr", "atmel,24c2048";
         reg = <0x50>;
         num-addresses = <4>;
+        pagesize = <256>;
         #address-cells = <1>;
         #size-cells = <0>;
     };
-    eeprom_2: eeprom@51 {
-        compatible = "st,m24m02", "atmel,24c2048";
+    eeprom_2: eeprom@54 {
+        compatible = "st,m24m02-dr", "atmel,24c2048";
         reg = <0x54>;
         num-addresses = <4>;
+        pagesize = <256>;
         #address-cells = <1>;
         #size-cells = <0>;
     };
@@ -151,6 +175,13 @@
         #address-cells = <1>;
         #size-cells = <0>;
     };
+    
+    fan_controller_6_1: max31790@23 {
+        compatible = "maxim,max31790";
+        reg = <0x23>;
+        #address-cells = <1>;
+        #size-cells = <0>;
+    };
 };
 
 &axi_iic_temp_sensor4 {
@@ -170,6 +201,16 @@
         reg = <0x4f>;
         #address-cells = <1>;
         #size-cells = <0>;
+    };
+
+    qm7_p5h_1: pmbus@64 {
+        compatible = "pmbus";
+        reg = <0x64>;
+    };
+
+    qm7_p5h_2: pmbus@65 {
+        compatible = "pmbus";
+        reg = <0x65>;
     };
 };
 
@@ -220,6 +261,9 @@
     reg = <0x0>;
     #address-cells = <1>;
     #size-cells = <1>;
+    spi-tx-bus-width = <1>;
+    spi-rx-bus-width = <2>;
+    spi-max-frequency = <50000000>;
     partitions {
         compatible = "fixed-partitions";
         #address-cells = <1>;
@@ -248,32 +292,32 @@
             label = "qspi-sel";
             reg = <0xA840000 0x100000>; /* 1 MB */
         };
+        partition@6 {
+            label = "qspi-policybits";
+            reg = <0xA940000 0x80000>; /* 512 KB */
+        };
+        partition@7 {
+            label = "qspi-persistent";
+            reg = <0xAA20000 0x80000>; /* 512 KB */
+        };
+        partition@8 {
+            label = "qspi-config";
+            reg = <0xAAB0000 0x80000>; /* 512 KB */
+        };
     };
 };
 
 &axi_quad_spi_0 {
     status = "okay";
-    #address-cells = <1>;
-    #size-cells = <0>;
-    interrupts = <0 66 4>;
-    interrupt-parent = <&intc>;
-    flash@0 {
-        compatible = "micron,mt25qu02g", "jedec,spi-nor";
+
+    spidev@0 {
+        compatible = "spidev";
         reg = <0>;
-        spi-max-frequency = <50000000>;
-        #address-cells = <1>;
-        #size-cells = <1>;
-        partitions {
-            compatible = "fixed-partitions";
-            #address-cells = <1>;
-            #size-cells = <1>;
-            partition@0 {
-                label = "qspi-test";
-                reg = <0x0 0x800000>;   /* 8 MB */
-            };
-        };
+        spi-max-frequency = <10000000>;
     };
+
 };
+
 &xadc_wiz_0 {
     #io-channel-cells = <1>;
     xlnx,channels {

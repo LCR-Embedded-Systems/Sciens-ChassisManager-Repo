@@ -428,6 +428,202 @@ inline void async_alarm_check(std::shared_ptr<sdbusplus::asio::connection> conn,
         });
 }
 
+inline void async_upper_crit_alarm_check(std::shared_ptr<sdbusplus::asio::connection> conn,
+                       const std::string& stub,
+                       const std::string& interface,
+                       int depth,
+                       std::function<void(bool)> callback) {
+    async_get_subtree(conn, stub, depth, {interface},
+        [conn, callback, interface](const SubTree& tree) {
+            if (tree.empty()) {
+                callback(false);
+                return;
+            }
+
+            // Extract paths and services (assume first service per path)
+            std::vector<std::pair<std::string, std::string>> items;
+            for (const auto& [p, s_map] : tree) {
+                if (!s_map.empty()) {
+                    items.emplace_back(p, s_map.begin()->first);
+                }
+            }
+            if (items.empty()) {
+                callback(false);
+                return;
+            }
+
+            // Chain checks over items, short-circuit on first alarm
+            auto idx = std::make_shared<size_t>(0);
+            auto check_next_ptr = std::make_shared<std::function<void()> >();
+            *check_next_ptr = [conn, items, idx, interface, callback, check_next_ptr]() mutable {
+                if (*idx >= items.size()) {
+                    callback(false);
+                    return;
+                }
+                auto [path, service] = items[*idx];
+                ++(*idx);
+
+                    // Get CriticalAlarmHigh
+                    async_get_dbus_property<bool>(conn, service, path, interface, "CriticalAlarmHigh",
+                        [callback, check_next_ptr](bool val) {
+                            if (val) {
+                                callback(true);
+                                return;
+                            }
+                            (*check_next_ptr)();
+                        });
+            };
+            (*check_next_ptr)();
+        });
+}
+
+inline void async_lower_crit_alarm_check(std::shared_ptr<sdbusplus::asio::connection> conn,
+                       const std::string& stub,
+                       const std::string& interface,
+                       int depth,
+                       std::function<void(bool)> callback) {
+    async_get_subtree(conn, stub, depth, {interface},
+        [conn, callback, interface](const SubTree& tree) {
+            if (tree.empty()) {
+                callback(false);
+                return;
+            }
+
+            // Extract paths and services (assume first service per path)
+            std::vector<std::pair<std::string, std::string>> items;
+            for (const auto& [p, s_map] : tree) {
+                if (!s_map.empty()) {
+                    items.emplace_back(p, s_map.begin()->first);
+                }
+            }
+            if (items.empty()) {
+                callback(false);
+                return;
+            }
+
+            // Chain checks over items, short-circuit on first alarm
+            auto idx = std::make_shared<size_t>(0);
+            auto check_next_ptr = std::make_shared<std::function<void()> >();
+            *check_next_ptr = [conn, items, idx, interface, callback, check_next_ptr]() mutable {
+                if (*idx >= items.size()) {
+                    callback(false);
+                    return;
+                }
+                auto [path, service] = items[*idx];
+                ++(*idx);
+
+                    // Get CriticalAlarmHigh
+                    async_get_dbus_property<bool>(conn, service, path, interface, "CriticalAlarmLow",
+                        [callback, check_next_ptr](bool val) {
+                            if (val) {
+                                callback(true);
+                                return;
+                            }
+                            (*check_next_ptr)();
+                        });
+            };
+            (*check_next_ptr)();
+        });
+}
+
+inline void async_upper_noncrit_alarm_check(std::shared_ptr<sdbusplus::asio::connection> conn,
+                       const std::string& stub,
+                       const std::string& interface,
+                       int depth,
+                       std::function<void(bool)> callback) {
+    async_get_subtree(conn, stub, depth, {interface},
+        [conn, callback, interface](const SubTree& tree) {
+            if (tree.empty()) {
+                callback(false);
+                return;
+            }
+
+            // Extract paths and services (assume first service per path)
+            std::vector<std::pair<std::string, std::string>> items;
+            for (const auto& [p, s_map] : tree) {
+                if (!s_map.empty()) {
+                    items.emplace_back(p, s_map.begin()->first);
+                }
+            }
+            if (items.empty()) {
+                callback(false);
+                return;
+            }
+
+            // Chain checks over items, short-circuit on first alarm
+            auto idx = std::make_shared<size_t>(0);
+            auto check_next_ptr = std::make_shared<std::function<void()> >();
+            *check_next_ptr = [conn, items, idx, interface, callback, check_next_ptr]() mutable {
+                if (*idx >= items.size()) {
+                    callback(false);
+                    return;
+                }
+                auto [path, service] = items[*idx];
+                ++(*idx);
+
+                    // Get CriticalAlarmHigh
+                    async_get_dbus_property<bool>(conn, service, path, interface, "WarningAlarmHigh",
+                        [callback, check_next_ptr](bool val) {
+                            if (val) {
+                                callback(true);
+                                return;
+                            }
+                            (*check_next_ptr)();
+                        });
+            };
+            (*check_next_ptr)();
+        });
+}
+
+inline void async_lower_noncrit_alarm_check(std::shared_ptr<sdbusplus::asio::connection> conn,
+                       const std::string& stub,
+                       const std::string& interface,
+                       int depth,
+                       std::function<void(bool)> callback) {
+    async_get_subtree(conn, stub, depth, {interface},
+        [conn, callback, interface](const SubTree& tree) {
+            if (tree.empty()) {
+                callback(false);
+                return;
+            }
+
+            // Extract paths and services (assume first service per path)
+            std::vector<std::pair<std::string, std::string>> items;
+            for (const auto& [p, s_map] : tree) {
+                if (!s_map.empty()) {
+                    items.emplace_back(p, s_map.begin()->first);
+                }
+            }
+            if (items.empty()) {
+                callback(false);
+                return;
+            }
+
+            // Chain checks over items, short-circuit on first alarm
+            auto idx = std::make_shared<size_t>(0);
+            auto check_next_ptr = std::make_shared<std::function<void()> >();
+            *check_next_ptr = [conn, items, idx, interface, callback, check_next_ptr]() mutable {
+                if (*idx >= items.size()) {
+                    callback(false);
+                    return;
+                }
+                auto [path, service] = items[*idx];
+                ++(*idx);
+
+                    // Get CriticalAlarmHigh
+                    async_get_dbus_property<bool>(conn, service, path, interface, "WarningAlarmLow",
+                        [callback, check_next_ptr](bool val) {
+                            if (val) {
+                                callback(true);
+                                return;
+                            }
+                            (*check_next_ptr)();
+                        });
+            };
+            (*check_next_ptr)();
+        });
+}
+
 }
 }
 }

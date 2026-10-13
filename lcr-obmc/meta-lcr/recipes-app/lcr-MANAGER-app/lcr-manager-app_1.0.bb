@@ -1,4 +1,4 @@
-SUMMARY = "BOOT SEQUENCE AND MANAGER"
+SUMMARY = "BOOT SEQUENCE, MANAGER, AND IP MANAGER"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
@@ -13,7 +13,10 @@ S = "${WORKDIR}"
 
 inherit pkgconfig systemd
 
-DEPENDS += "sdbusplus phosphor-dbus-interfaces systemd phosphor-logging fmt nlohmann-json libgpiod mtd-utils"
+SIMULATION ??= "0"
+CXXFLAGS:append = "${@bb.utils.contains('SIMULATION', '1', ' -DSIMULATION', '', d)}"
+
+DEPENDS += "sdbusplus phosphor-dbus-interfaces systemd phosphor-logging fmt nlohmann-json libgpiod mtd-utils boost"
 
 do_compile() {
     ${CXX} ${CXXFLAGS} -std=c++20 \

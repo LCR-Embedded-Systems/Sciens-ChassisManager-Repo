@@ -13,6 +13,7 @@ FRUTemperatureSensor::FRUTemperatureSensor(std::shared_ptr<sdbusplus::asio::conn
     obj_server.add_manager("/xyz/openbmc_project/sensors");
     phosphor::logging::log<phosphor::logging::level::INFO>("FRUTemperatureSensor initialization");
     sensor_path = "/xyz/openbmc_project/sensors/mandatoryNumbers/VSO_TEMPERATURE";
+    byte3 = static_cast<double>(1 << 5);
 }
 
 FRUTemperatureSensor::~FRUTemperatureSensor() {
@@ -44,7 +45,17 @@ void FRUTemperatureSensor::expose_sensor() {
         sdbusplus::vtable::property_::emits_change,
         [this](const auto&) { return current_value; }
     );
+    value_iface->register_property_r<double>(
+        "Byte3",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const auto&) { return byte3; }
+    );
 
+    value_iface->register_property_r<double>(
+        "Byte4",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const auto&) { return byte4; }
+    );
     // Register other required properties for Sensor.Value with defaults
     value_iface->register_property_r<int64_t>(
         "MaxValue",
@@ -90,8 +101,8 @@ void FRUTemperatureSensor::async_update_interface() {
     // phosphor::logging::log<phosphor::logging::level::INFO>("FRUTemperatureSensor async_update_interface enter");
     async_get_all_alarms_status([this](uint8_t val) {
         double new_val = static_cast<double>(val);
-        if (new_val != this->current_value) {
-            this->current_value = new_val;
+        if (new_val != this->byte4) {
+            this->byte4 = new_val;
             if (this->value_iface) {
                 this->emit_value_changed();
             }
@@ -120,17 +131,48 @@ void FRUTemperatureSensor::async_get_all_alarms_status(std::function<void(uint8_
     std::string threshold_interface = "xyz.openbmc_project.Sensor.Threshold.Critical";
     std::string stub = "/xyz/openbmc_project/sensors/temperature";
 
-    auto alarm_active = std::make_shared<bool>(false);
+    auto alarms = std::make_shared<uint8_t>(0x00);
 
-    auto done = [callback, alarm_active]() {
-        callback(*alarm_active ? 0x02 : 0x01);
+    auto remaining = std::make_shared<std::atomic<int>>(4);
+
+    auto done = [callback, alarms, remaining]() {
+        if (--(*remaining) == 0) {
+            callback(*alarms);
+        }
     };
 
-    phosphor::interface::util::async_alarm_check(conn, stub, threshold_interface, 0,
-        [alarm_active, done](bool res) {
+    phosphor::interface::util::async_upper_crit_alarm_check(conn, stub, threshold_interface, 0,
+        [alarms, done](bool res) {
             if (res) {
                 // phosphor::logging::log<phosphor::logging::level::INFO>("FRUTemperatureSensor async_get_all_alarms_status an alarm is set");
-                *alarm_active = true;
+                *alarms |= (1 << 4);
+            }
+            done();
+        });
+
+    phosphor::interface::util::async_upper_noncrit_alarm_check(conn, stub, threshold_interface, 0,
+        [alarms, done](bool res) {
+            if (res) {
+                // phosphor::logging::log<phosphor::logging::level::INFO>("FRUTemperatureSensor async_get_all_alarms_status an alarm is set");
+                *alarms |= (1 << 3);
+            }
+            done();
+        });
+
+    phosphor::interface::util::async_lower_crit_alarm_check(conn, stub, threshold_interface, 0,
+        [alarms, done](bool res) {
+            if (res) {
+                // phosphor::logging::log<phosphor::logging::level::INFO>("FRUTemperatureSensor async_get_all_alarms_status an alarm is set");
+                *alarms |= (1 << 1);
+            }
+            done();
+        });
+
+    phosphor::interface::util::async_lower_noncrit_alarm_check(conn, stub, threshold_interface, 0,
+        [alarms, done](bool res) {
+            if (res) {
+                // phosphor::logging::log<phosphor::logging::level::INFO>("FRUTemperatureSensor async_get_all_alarms_status an alarm is set");
+                *alarms |= (1);
             }
             done();
         });

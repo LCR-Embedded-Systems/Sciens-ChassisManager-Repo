@@ -136,7 +136,6 @@ using ObjectManagerIface = sdbusplus::server::manager_t;
 using ThresholdIface = sdbusplus::xyz::openbmc_project::Sensor::Threshold::server::Critical;
 using warnThresholdIface = sdbusplus::xyz::openbmc_project::Sensor::Threshold::server::Warning;
 
-extern std::ofstream dbgFile;
 
 /*
 # of bytes in the response for get fru led properties
@@ -172,6 +171,21 @@ struct CAT
     std::array<uint8_t, 20> chassis_id_field;
     uint8_t chassis_add_table_entries_count;
     std::vector<CAT_entry> entries;
+};
+
+struct chassis_IPMB_description_record
+{
+    uint8_t Record_Type_ID;
+    uint8_t End_of_List;
+    uint8_t Record_Length;
+    uint8_t Record_Checksum;
+    uint8_t Header_Checksum;
+    uint8_t Manufacturer_ID_1;
+    uint8_t Manufacturer_ID_2;
+    uint8_t Manufacturer_ID_3;
+    uint8_t Vita_Record_ID;
+    uint8_t Record_Format_Version;
+    uint8_t IPMB_Support;
 };
 
 struct VSOCaps
@@ -306,7 +320,6 @@ private:
     bool isVITA4611Device;
     bool validDeviceID;
     std::vector<uint8_t> DeviceIDData;
-    VSOCaps *vsocaps;
 
     /*
     * list of all FRUs supported by this device
@@ -336,6 +349,7 @@ private:
         uint8_t Acc, uint8_t R_exp, uint8_t B_exp, uint8_t analog_characteristics, uint8_t reading);
 
 public:
+    VSOCaps *vsocaps;
     FruInfo fruinfo;
     void getAllSensorReadings();
     void getAllSDRs();
@@ -396,6 +410,8 @@ public:
 
     std::future<std::vector<uint8_t>> submit(VITA4611Command req);
     void sendShutdown();
+
+    void populate_fru_policy_bits();
 
     void get_device_list(std::vector<uint8_t>& ipmi_address_list);
 
@@ -506,6 +522,15 @@ private:
     sdbusplus::server::manager_t sensorsManager;
 
     std::map<std::string, std::unique_ptr<sdbusplus::server::object_t<ValueIface, AssociationIface, ThresholdIface, warnThresholdIface>>> sensorIfaces;
+
+    bool ipmb_b_enabled;
+
+    chassis_IPMB_description_record *IPMB_inst;
+
+    bool IPMB_chassis_supported;
+    bool IPMB_A_400khz;
+    bool IPMB_B_400khz;
+
 };
 
 

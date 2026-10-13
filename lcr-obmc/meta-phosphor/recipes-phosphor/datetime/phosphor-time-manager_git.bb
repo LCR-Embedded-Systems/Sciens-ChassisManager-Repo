@@ -19,7 +19,6 @@ S = "${WORKDIR}/git"
 inherit meson pkgconfig python3native
 inherit obmc-phosphor-dbus-service
 
-RDEPENDS:${PN} += "phosphor-settings-manager"
 RDEPENDS:${PN} += "phosphor-network"
 RDEPENDS:${PN} += "phosphor-objmgr"
 

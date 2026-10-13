@@ -1,0 +1,13 @@
+[Unit]
+Description=Mount qspi-config (mtd8) JFFS2 for bus-devices JSON configuration file
+DefaultDependencies=no
+After=local-fs-pre.target systemd-tmpfiles-setup.service
+
+[Mount]
+What=/dev/mtdblock8
+Where=/usr/share/lcr_configs
+Type=jffs2
+Options=rw,noatime
+
+[Install]
+WantedBy=local-fs.target

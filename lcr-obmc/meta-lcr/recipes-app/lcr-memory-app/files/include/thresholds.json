@@ -41,6 +41,36 @@
         "warnmin": 4.8,
         "warnmax": 5.2
     },
+    "Fan_Voltage": {
+        "critmin": 25.0,
+        "critmax": 31.0,
+        "warnmin": 26.0,
+        "warnmax": 30.0
+    },
+    "fan_1current": {
+        "critmin": 0.0,
+        "critmax": 10.0,
+        "warnmin": 0.0,
+        "warnmax": 9.0
+    },
+    "fan_2current": {
+        "critmin": 0.0,
+        "critmax": 10.0,
+        "warnmin": 0.0,
+        "warnmax": 9.0
+    },
+    "fan_3current": {
+        "critmin": 0.0,
+        "critmax": 10.0,
+        "warnmin": 0.0,
+        "warnmax": 9.0
+    },
+    "fan_4current": {
+        "critmin": 0.0,
+        "critmax": 10.0,
+        "warnmin": 0.0,
+        "warnmax": 9.0
+    },
     "J17": {
         "critmin": 0,
         "critmax": 5000,
@@ -60,6 +90,12 @@
         "warnmax": 5000
     },
     "J7": {
+        "critmin": 0,
+        "critmax": 5000,
+        "warnmin": 0,
+        "warnmax": 5000
+    },
+    "chassis_fan": {
         "critmin": 0,
         "critmax": 5000,
         "warnmin": 0,

@@ -32,12 +32,13 @@ bool gpio_chip_exists(const std::string& chip_path) {
 
 GpioMonitor::GpioMonitor(std::shared_ptr<sdbusplus::asio::connection> conn_ref,
         sdbusplus::asio::object_server& server_ref)
-        : conn(conn_ref), obj_server(server_ref), timer(conn->get_io_context()){
+        : conn(conn_ref), obj_server(server_ref), timer(conn->get_io_context())
+{
 
     obj_server.add_manager("/xyz/openbmc_project/sensors");
     phosphor::logging::log<phosphor::logging::level::INFO>("GpioMonitor initialization");
     
-    configJson = readJson("/usr/share/lcr_configs/bus_devices_standalone.json");
+    configJson = readJson("/usr/share/lcr_configs/bus_devices.json");
 
     ts = 0.1;
     build_gpio_list();
@@ -49,9 +50,10 @@ GpioMonitor::GpioMonitor(std::shared_ptr<sdbusplus::asio::connection> conn_ref,
 
 GpioMonitor::~GpioMonitor() {;};
 
-gpio_info GpioMonitor::populate_info(bool input, int chip, int line, int status, std::string name) {
+gpio_info GpioMonitor::populate_info(bool input, bool interrupt, int chip, int line, int status, std::string name) {
     gpio_info populated_gpio;
     populated_gpio.input = input;
+    populated_gpio.interrupt = interrupt;
     populated_gpio.chip = chip;
     populated_gpio.line = line;
     populated_gpio.status = status;
@@ -60,54 +62,32 @@ gpio_info GpioMonitor::populate_info(bool input, int chip, int line, int status,
     return populated_gpio;
 }
 
+gpiod::chip GpioMonitor::find_chip_by_label(const std::string& want)
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("find_chip_by_label enter");
+    for (auto& c : gpiod::make_chip_iter())
+    {
+        phosphor::logging::log<phosphor::logging::level::INFO>(("find_chip_by_label on chip " + c.name() + " with label " + c.label()).c_str());
+        if (c.label() == want)
+            return c;
+    }
+    gpiod::chip empty_chip;
+    return empty_chip;
+}
+
 void GpioMonitor::build_gpio_list() {
 
     phosphor::logging::log<phosphor::logging::level::INFO>("populating gpio list");
 
-    BP_GPIO_OUT0 = populate_info(false, 0, 8, 0, std::string("BP_GPIO_OUT0"));
-    BP_GPIO_OUT1 = populate_info(false, 0, 9, 0, std::string("BP_GPIO_OUT1"));
-    BP_GPIO_OUT2 = populate_info(false, 0, 10, 0, std::string("BP_GPIO_OUT2"));
-    BP_GPIO_OUT3 = populate_info(false, 0, 11, 0, std::string("BP_GPIO_OUT3"));
-    BP_GPIO_OUT4 = populate_info(false, 0, 12, 0, std::string("BP_GPIO_OUT4"));
-    BP_GPIO_OUT5 = populate_info(false, 0, 13, 0, std::string("BP_GPIO_OUT5"));
-    BP_GPIO_OUT6 = populate_info(false, 0, 14, 0, std::string("BP_GPIO_OUT6"));
-    BP_GPIO_OUT7 = populate_info(false, 0, 15, 0, std::string("BP_GPIO_OUT7"));
-    
-    BP_GPIO_IN0 = populate_info(true, 0, 0, 0, std::string("BP_GPIO_IN0"));
-    BP_GPIO_IN1 = populate_info(true, 0, 1, 0, std::string("BP_GPIO_IN1"));
-    BP_GPIO_IN2 = populate_info(true, 0, 2, 0, std::string("BP_GPIO_IN2"));
-    BP_GPIO_IN3 = populate_info(true, 0, 3, 0, std::string("BP_GPIO_IN3"));
-    BP_GPIO_IN4 = populate_info(true, 0, 4, 0, std::string("BP_GPIO_IN4"));
-    BP_GPIO_IN5 = populate_info(true, 0, 5, 0, std::string("BP_GPIO_IN5"));
-    BP_GPIO_IN6 = populate_info(true, 0, 6, 0, std::string("BP_GPIO_IN6"));
-    BP_GPIO_IN7 = populate_info(true, 0, 7, 0, std::string("BP_GPIO_IN7"));
+    sysreset = populate_info(false, false, 1, 0, 0, std::string("sysreset"));
+    nvmro = populate_info(true, false, 2, 0, 0, std::string("nvmro"));
+    gdiscrete = populate_info(false, false, 3, 0, 0, std::string("gdiscrete"));
+    psenable = populate_info(false, false, 3, 3, 0, std::string("psenable"));
+    ps1inh = populate_info(false, false, 3, 2, 0, std::string("ps1inh"));
+    ps1fail = populate_info(true, false, 4, 0, 0, std::string("ps1fail"));
+    ps2inh = populate_info(false, false, 3, 1, 0, std::string("ps2inh"));
+    ps2fail = populate_info(true, false, 4, 1, 0, std::string("ps2fail"));
 
-    sysreset = populate_info(false, 1, 0, 0, std::string("sysreset"));
-    nvmro = populate_info(true, 2, 4, 0, std::string("nvmro"));
-    gdiscrete = populate_info(false, 2, 0, 0, std::string("gdiscrete"));
-    psenable = populate_info(false, 2, 3, 0, std::string("psenable"));
-    ps1inh = populate_info(false, 2, 2, 0, std::string("ps1inh"));
-    ps1fail = populate_info(true, 3, 0, 0, std::string("ps1fail"));
-    ps2inh = populate_info(false, 2, 1, 0, std::string("ps2inh"));
-    ps2fail = populate_info(true, 3, 1, 0, std::string("ps2fail"));
-
-    available_gpios[BP_GPIO_OUT0.name] = BP_GPIO_OUT0;
-    available_gpios[BP_GPIO_OUT1.name] = BP_GPIO_OUT1;
-    available_gpios[BP_GPIO_OUT2.name] = BP_GPIO_OUT2;
-    available_gpios[BP_GPIO_OUT3.name] = BP_GPIO_OUT3;
-    available_gpios[BP_GPIO_OUT4.name] = BP_GPIO_OUT4;
-    available_gpios[BP_GPIO_OUT5.name] = BP_GPIO_OUT5;
-    available_gpios[BP_GPIO_OUT6.name] = BP_GPIO_OUT6;
-    available_gpios[BP_GPIO_OUT7.name] = BP_GPIO_OUT7;
-
-    available_gpios[BP_GPIO_IN0.name] = BP_GPIO_IN0;
-    available_gpios[BP_GPIO_IN1.name] = BP_GPIO_IN1;
-    available_gpios[BP_GPIO_IN2.name] = BP_GPIO_IN2;
-    available_gpios[BP_GPIO_IN3.name] = BP_GPIO_IN3;
-    available_gpios[BP_GPIO_IN4.name] = BP_GPIO_IN4;
-    available_gpios[BP_GPIO_IN5.name] = BP_GPIO_IN5;
-    available_gpios[BP_GPIO_IN6.name] = BP_GPIO_IN6;
-    available_gpios[BP_GPIO_IN7.name] = BP_GPIO_IN7;
     available_gpios[nvmro.name] = nvmro;
     available_gpios[sysreset.name] = sysreset;
     available_gpios[ps1fail.name] = ps1fail;
@@ -126,18 +106,69 @@ void GpioMonitor::build_gpio_list() {
     chassis_signals[ps1inh.name] = ps1inh;
     chassis_signals[ps2inh.name] = ps2inh;
 
-    for (auto& gpio_chip : configJson["gpioexpanders"].items()) {
-        if (gpio_chip_exists("/dev/" + gpio_chip.key())) {
-            phosphor::logging::log<phosphor::logging::level::INFO>(("gpio chip " + gpio_chip.key()).c_str());
-            char c_chip = gpio_chip.key().back();
-            std::string s_chip(1, c_chip);
-            int chip = stoi(s_chip);
-            for (auto& gpio : gpio_chip.value().items()) {
-                int line = configJson["gpioexpanders"][gpio_chip.key()][gpio.key()].get<int>();
-                available_gpios[gpio.key()] = populate_info(false, chip, line, 0, gpio.key());
+    for (auto& gpio_label : configJson["gpioexpanders"].items()) {
+        phosphor::logging::log<phosphor::logging::level::INFO>(("gpio chip " + gpio_label.key() + " checking interrupt...").c_str());
+        bool interrupt = configJson["gpioexpanders"][gpio_label.key()]["interrupt"].get<bool>();
+        if (interrupt) {
+            phosphor::logging::log<phosphor::logging::level::INFO>(("gpio chip " + gpio_label.key() + " interrupt is true, getting interrupt pin").c_str());
+            interrupt_pins.push_back(configJson["gpioexpanders"][gpio_label.key()]["interrupt_pin"].get<std::string>());
+        }
+        gpiod::chip gpiochip = find_chip_by_label(gpio_label.key());
+        if (!gpiochip) {
+            continue;
+        }
+        std::string gpiochipname = gpiochip.name();
+        phosphor::logging::log<phosphor::logging::level::INFO>(("gpiochipname " + gpiochipname + " found").c_str());
+        char c_chip = gpiochip.name().back();
+        std::string s_chip(1, c_chip);
+        int chip = stoi(s_chip);
+        if (gpio_chip_exists("/dev/" + gpiochipname)) {
+            
+            for (auto& gpio : gpio_label.value().items()) {
+                if (gpio.key() != "bus" && gpio.key() != "address" && gpio.key() != "interrupt" && gpio.key() != "interrupt_pin") {
+                    int line = configJson["gpioexpanders"][gpio_label.key()][gpio.key()].get<int>();
+                    phosphor::logging::log<phosphor::logging::level::INFO>(("gpio chip " + gpio_label.key() + " being populated in list").c_str());
+                    available_gpios[gpio.key()] = populate_info(false, interrupt, chip, line, 0, gpio.key());
+                }
             }
         } else {
-            phosphor::logging::log<phosphor::logging::level::INFO>(("gpio chip " + gpio_chip.key() + " is not present.").c_str());
+            phosphor::logging::log<phosphor::logging::level::INFO>(("gpio chip " + gpio_label.key() + " is not present.").c_str());
+        }
+    }
+
+    std::unordered_map<int, std::string> output_names = {
+        {8,  configJson["nativeGPIOs"]["8"].get<std::string>()},
+        {9,  configJson["nativeGPIOs"]["9"].get<std::string>()},
+        {10, configJson["nativeGPIOs"]["10"].get<std::string>()},
+        {11, configJson["nativeGPIOs"]["11"].get<std::string>()},
+        {12, configJson["nativeGPIOs"]["12"].get<std::string>()},
+        {13, configJson["nativeGPIOs"]["13"].get<std::string>()},
+        {14, configJson["nativeGPIOs"]["14"].get<std::string>()},
+        {15, configJson["nativeGPIOs"]["15"].get<std::string>()}
+    };
+
+    std::unordered_map<int, std::string> input_names = {
+        {0, configJson["nativeGPIOs"]["0"].get<std::string>()},
+        {1, configJson["nativeGPIOs"]["1"].get<std::string>()},
+        {2, configJson["nativeGPIOs"]["2"].get<std::string>()},
+        {3, configJson["nativeGPIOs"]["3"].get<std::string>()},
+        {4, configJson["nativeGPIOs"]["4"].get<std::string>()},
+        {5, configJson["nativeGPIOs"]["5"].get<std::string>()},
+        {6, configJson["nativeGPIOs"]["6"].get<std::string>()},
+        {7, configJson["nativeGPIOs"]["7"].get<std::string>()}
+    };
+
+    for (const auto& [line, name] : output_names) {
+        gpio_info output_gpio = populate_info(false, false, 0, line, 0, name);
+        available_gpios[output_gpio.name] = output_gpio;
+    }
+
+    for (const auto& [line, name] : input_names) {
+        phosphor::logging::log<phosphor::logging::level::INFO>(("input gpio " + name).c_str());
+        if (std::find(interrupt_pins.begin(), interrupt_pins.end(), name) == interrupt_pins.end()) {
+            gpio_info input_gpio = populate_info(true, false, 0, line, 0, name);
+            available_gpios[input_gpio.name] = input_gpio;
+            phosphor::logging::log<phosphor::logging::level::INFO>(("input gpio " + name + " populated").c_str());
         }
     }
 }
@@ -152,7 +183,8 @@ bool GpioMonitor::readgpio(gpio_info* target_gpio)
             break;
         }
     }
-    if (target_gpio->input || !ischassissig) {
+    if (target_gpio->input && (!ischassissig || (target_gpio->name == std::string("nvmro")) || (target_gpio->name == std::string("ps1fail"))
+     || (target_gpio->name == std::string("ps2fail")) || (target_gpio->name == configJson["onSwitchGPIO"]["name"]))) {
         try {
 
             if (target_gpio == nullptr) {
@@ -212,16 +244,145 @@ void GpioMonitor::expose_gpios() {
         expose_gpio(gpio);
     
     }
+
+    if (!powerswitch_init) {
+        expose_unpopulated_powerswitch();
+    } 
+    if (!intrusion_init) {
+        expose_unpopulated_intrusion();
+    } 
+    if (!resetbutton_init) {
+        expose_unpopulated_resetbutton();
+    }
     phosphor::logging::log<phosphor::logging::level::INFO>("expose_gpios exit");
 }
 
-void GpioMonitor::expose_gpio(const gpio_info& target_gpio) {
+void GpioMonitor::expose_powerswitch_gpio(const gpio_info& target_gpio) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("expose_powerswitch_gpio enter");
+    std::string path = "/xyz/openbmc_project/Chassis/Buttons/Power0";
+    powerswitch_iface = obj_server.add_unique_interface(path, "xyz.openbmc_project.Chassis.Buttons.Power");
+    powerswitch_iface->register_property_r<bool>(
+        "Enabled",
+        sdbusplus::vtable::property_::emits_change,
+        [this, name = target_gpio.name](const bool&) -> bool {
+            // Getter: Retrieve from map
+            auto it = available_gpios.find(name);
+            if (it != available_gpios.end()) {
+                return (it->second.status == 1);
+            }
+            return false;  // Fallback
+        }
+    );
+    powerswitch_iface->initialize();
+    powerswitch_init = true;
+}
+
+void GpioMonitor::expose_resetbutton_gpio(const gpio_info& target_gpio) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("expose_resetbutton_gpio enter");
+    std::string path = "/xyz/openbmc_project/Chassis/Buttons/Reset0";
+    resetbutton_iface = obj_server.add_unique_interface(path, "xyz.openbmc_project.Chassis.Buttons.Reset");
+    resetbutton_iface->register_property_r<bool>(
+        "Enabled",
+        sdbusplus::vtable::property_::emits_change,
+        [this, name = target_gpio.name](const bool&) -> bool {
+            // Getter: Retrieve from map
+            auto it = available_gpios.find(name);
+            if (it != available_gpios.end()) {
+                return (it->second.status == 1);
+            }
+            return false;  // Fallback
+        }
+    );
+    resetbutton_iface->initialize();
+    resetbutton_init = true;
+}
+
+void GpioMonitor::expose_intrusion_gpio(const gpio_info& target_gpio) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("expose_intrusion_gpio enter");
+    std::string path = "/xyz/openbmc_project/Chassis/Intrusion";
+    intrusion_iface = obj_server.add_unique_interface(path, "xyz.openbmc_project.Chassis.Intrusion");
+    intrusion_iface->register_property_r<bool>(
+        "Status",
+        sdbusplus::vtable::property_::emits_change,
+        [this, name = target_gpio.name](const bool&) -> bool {
+            // Getter: Retrieve from map
+            auto it = available_gpios.find(name);
+            if (it != available_gpios.end()) {
+                return (it->second.status == 1);
+            }
+            return false;  // Fallback
+        }
+    );
+    intrusion_iface->initialize();
+    intrusion_init = true;
+}
+
+
+void GpioMonitor::expose_unpopulated_powerswitch() 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("expose_unpopulated_powerswitch enter");
+    std::string path = "/xyz/openbmc_project/Chassis/Buttons/Power0";
+    powerswitch_iface = obj_server.add_unique_interface(path, "xyz.openbmc_project.Chassis.Buttons.Power");
+    powerswitch_iface->register_property_r<bool>(
+        "Enabled",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const bool&) -> bool {
+            return false;
+        }
+    );
+    powerswitch_iface->initialize();
+    powerswitch_init = true;
+}
+
+void GpioMonitor::expose_unpopulated_resetbutton() 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("expose_unpopulated_resetbutton enter");
+    std::string path = "/xyz/openbmc_project/Chassis/Buttons/Reset0";
+    resetbutton_iface = obj_server.add_unique_interface(path, "xyz.openbmc_project.Chassis.Buttons.Reset");
+    resetbutton_iface->register_property_r<bool>(
+        "Enabled",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const bool&) -> bool {
+            return false;
+        }
+    );
+    resetbutton_iface->initialize();
+    resetbutton_init = true;
+}
+
+void GpioMonitor::expose_unpopulated_intrusion() 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>("expose_unpopulated_intrusion enter");
+    std::string path = "/xyz/openbmc_project/Chassis/Intrusion";
+    intrusion_iface = obj_server.add_unique_interface(path, "xyz.openbmc_project.Chassis.Intrusion");
+    intrusion_iface->register_property_r<bool>(
+        "Status",
+        sdbusplus::vtable::property_::emits_change,
+        [this](const bool&) -> bool {
+            return false;
+        }
+    );
+    intrusion_iface->initialize();
+    intrusion_init = true;
+}
+
+void GpioMonitor::expose_gpio(const gpio_info& target_gpio) 
+{
+    phosphor::logging::log<phosphor::logging::level::INFO>(("expose_gpio enter, name: " + target_gpio.name).c_str());
+    if (target_gpio.name == configJson["onSwitchGPIO"]["name"].get<std::string>()) {
+        expose_powerswitch_gpio(target_gpio);
+    } else if (target_gpio.name == configJson["resetSwitchGPIO"]["name"].get<std::string>()) {
+        expose_resetbutton_gpio(target_gpio);
+    } else if (target_gpio.name == configJson["intrusionSensorGPIO"]["name"].get<std::string>()) {
+        expose_intrusion_gpio(target_gpio);
+    }
 
     std::string path = "/xyz/openbmc_project/gpio/" + target_gpio.name;
     std::unique_ptr<sdbusplus::asio::dbus_interface> value_iface = obj_server.add_unique_interface(path, "xyz.openbmc_project.Sensor.Value");
     std::unique_ptr<sdbusplus::asio::dbus_interface> assoc_iface = obj_server.add_unique_interface(path, "xyz.openbmc_project.Association.Definitions");
-
-    phosphor::logging::log<phosphor::logging::level::INFO>(("attempting to expose " + path).c_str());
 
     value_iface->register_property_rw<int>(
         "Value",
@@ -236,19 +397,12 @@ void GpioMonitor::expose_gpio(const gpio_info& target_gpio) {
     
             if (requested_value == current_value) {
                 // No change - don't emit signal
-                return false;
+                return true;
             }
     
             // Update internal D-Bus value and map
             current_value = requested_value;
             it->second.status = requested_value;
-    
-            phosphor::logging::log<phosphor::logging::level::INFO>(
-                ("D-Bus set Value for " + name + " to " + std::to_string(requested_value)).c_str()
-            );
-            phosphor::logging::log<phosphor::logging::level::INFO>(
-                ("Internal value of " + name + " set to " + std::to_string(it->second.status)).c_str()
-            );
 
             // Success with change - emit signal
             return true;
@@ -257,35 +411,48 @@ void GpioMonitor::expose_gpio(const gpio_info& target_gpio) {
             // Getter: Retrieve from map
             auto it = available_gpios.find(name);
             if (it != available_gpios.end()) {
-                phosphor::logging::log<phosphor::logging::level::INFO>(
-                    ("Internal value of " + name + " is currently " + std::to_string(it->second.status)).c_str()
-                );
                 return it->second.status;
             }
             return -1;  // Fallback
         }
     );
+    
+    value_iface->register_property_r<int>(
+        "Chip",
+        sdbusplus::vtable::property_::const_,
+        [this, name = target_gpio.name](const int&) -> int {
+            // Getter: Retrieve from map
+            auto it = available_gpios.find(name);
+            if (it != available_gpios.end()) {
+                return it->second.chip;
+            }
+            return -1;  // Fallback
+        }
+    );
+    value_iface->register_property_r<int>(
+        "Line",
+        sdbusplus::vtable::property_::const_,
+        [this, name = target_gpio.name](const int&) -> int {
+            // Getter: Retrieve from map
+            auto it = available_gpios.find(name);
+            if (it != available_gpios.end()) {
+                return it->second.line;
+            }
+            return -1;  // Fallback
+        }
+    );
 
-    // Register other required properties for Sensor.Value with defaults
-    value_iface->register_property_r<int>(
-        "MaxValue",
+    value_iface->register_property_r<bool>(
+        "Input",
         sdbusplus::vtable::property_::const_,
-        [](const auto&) { return 1; }
-    );
-    value_iface->register_property_r<int>(
-        "MinValue",
-        sdbusplus::vtable::property_::const_,
-        [](const auto&) { return 0; }
-    );
-    value_iface->register_property_r<std::string>(
-        "Unit",
-        sdbusplus::vtable::property_::const_,
-        [](const auto&) { return std::string("xyz.openbmc_project.Sensor.Value.Unit.None"); }
-    );
-    value_iface->register_property_r<int64_t>(
-        "Scale",
-        sdbusplus::vtable::property_::const_,
-        [](const auto&) { return int64_t(0); }
+        [this, name = target_gpio.name](const bool&) -> bool {
+            // Getter: Retrieve from map
+            auto it = available_gpios.find(name);
+            if (it != available_gpios.end()) {
+                return it->second.input;
+            }
+            return -1;  // Fallback
+        }
     );
 
     assoc_iface->register_property_r<std::vector<std::tuple<std::string, std::string, std::string>>>(

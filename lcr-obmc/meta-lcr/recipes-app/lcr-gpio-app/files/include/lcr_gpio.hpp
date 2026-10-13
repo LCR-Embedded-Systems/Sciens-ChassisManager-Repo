@@ -44,6 +44,8 @@ class CLI
 
     private:
 
+        nlohmann::json configJson;
+        
         sdbusplus::bus::bus bus;
 
         std::vector<gpio_info> available_gpios;

@@ -195,7 +195,6 @@ auto loadDBusData()
     pathMap["pwm"] =
         getPathsFromIface(paths["control"], interfaces["FanPwm"], fanNames);
         
-    std::cout << "loadDBusData exit" << std::endl;
     return std::make_tuple(fanNames, pathMap, interfaces, method);
 }
 
@@ -275,7 +274,6 @@ std::string ifaceTypeFromMethod(const std::string& method)
  */
 void status()
 {
-    std::cout << "status enter" << std::endl;
     using std::cout;
     using std::endl;
     using std::setw;
@@ -301,7 +299,6 @@ void status()
     cout << "==============================================================="
          << endl;
     
-    std::cout << "status getting maps" << std::endl;
     auto& fanNames{std::get<FAN_NAMES>(busData)};
     auto& pathMap{std::get<PATH_MAP>(busData)};
     auto& interfaces{std::get<IFACES>(busData)};
@@ -324,7 +321,7 @@ void status()
         // print tach readings for each rotor
         for (auto& path : pathMap["tach"][fan])
         {
-            output << SDBusPlus::getProperty<double>(
+            output << SDBusPlus::getProperty<int>(
                 path, interfaces["SensorValue"], property);
 
             // dont print slash on last rotor
